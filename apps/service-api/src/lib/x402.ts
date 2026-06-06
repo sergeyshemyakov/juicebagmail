@@ -7,8 +7,10 @@ import {
   USDC_TESTNET_ASA_ID,
 } from "@x402-avm/avm";
 import {
+  ALGORAND_MAINNET_QUANTOZ,
   ROUTE_KEYS,
   ROUTE_PRICES,
+  ROUTE_PRICES_EURD,
 } from "@juicebag-mail/shared";
 import type { MiddlewareHandler } from "hono";
 
@@ -34,69 +36,142 @@ export type ServiceVariables = {
   paymentFinalize?: (txid: string) => Promise<PaymentFinalizeResult>;
 };
 
-export function createRouteConfig(env: ServiceEnv) {
+export type PaymentOptions = {
+  usdc: true;
+  eurd: boolean;
+};
+
+type CaipNetwork = `${string}:${string}`;
+const testnet = ALGORAND_TESTNET_CAIP2 as CaipNetwork;
+const mainnet = ALGORAND_MAINNET_QUANTOZ as CaipNetwork;
+
+export function createRouteConfig(env: ServiceEnv, paymentOptions: PaymentOptions) {
   return {
     "POST /v1/registrations": {
-      accepts: {
-        scheme: "exact",
-        price: ROUTE_PRICES.registration,
-        network: ALGORAND_TESTNET_CAIP2,
-        payTo: env.SELLER_ADDRESS,
-        extra: { asset: USDC_TESTNET_ASA_ID },
-      },
+      accepts: [
+        {
+          scheme: "exact",
+          price: ROUTE_PRICES.registration,
+          network: testnet,
+          payTo: env.SELLER_ADDRESS,
+          extra: { asset: USDC_TESTNET_ASA_ID },
+        },
+        ...(paymentOptions.eurd
+          ? [
+              {
+                scheme: "exact" as const,
+                price: ROUTE_PRICES_EURD.registration,
+                network: mainnet,
+                payTo: env.SELLER_ADDRESS,
+              },
+            ]
+          : []),
+      ],
       description: "Register a Juicebag Mail mailbox",
       mimeType: "application/json",
     },
     "POST /v1/outbound-letters": {
-      accepts: {
-        scheme: "exact",
-        price: ROUTE_PRICES.outboundLetter,
-        network: ALGORAND_TESTNET_CAIP2,
-        payTo: env.SELLER_ADDRESS,
-        extra: { asset: USDC_TESTNET_ASA_ID },
-      },
+      accepts: [
+        {
+          scheme: "exact",
+          price: ROUTE_PRICES.outboundLetter,
+          network: testnet,
+          payTo: env.SELLER_ADDRESS,
+          extra: { asset: USDC_TESTNET_ASA_ID },
+        },
+        ...(paymentOptions.eurd
+          ? [
+              {
+                scheme: "exact" as const,
+                price: ROUTE_PRICES_EURD.outboundLetter,
+                network: mainnet,
+                payTo: env.SELLER_ADDRESS,
+              },
+            ]
+          : []),
+      ],
       description: "Queue a physical outbound letter",
       mimeType: "application/json",
     },
     "POST /v1/inbound-letters/unlock": {
-      accepts: {
-        scheme: "exact",
-        price: ROUTE_PRICES.inboundUnlock,
-        network: ALGORAND_TESTNET_CAIP2,
-        payTo: env.SELLER_ADDRESS,
-        extra: { asset: USDC_TESTNET_ASA_ID },
-      },
+      accepts: [
+        {
+          scheme: "exact",
+          price: ROUTE_PRICES.inboundUnlock,
+          network: testnet,
+          payTo: env.SELLER_ADDRESS,
+          extra: { asset: USDC_TESTNET_ASA_ID },
+        },
+        ...(paymentOptions.eurd
+          ? [
+              {
+                scheme: "exact" as const,
+                price: ROUTE_PRICES_EURD.inboundUnlock,
+                network: mainnet,
+                payTo: env.SELLER_ADDRESS,
+              },
+            ]
+          : []),
+      ],
       description: "Unlock OCR text for an inbound letter",
       mimeType: "application/json",
     },
-  } as const;
+  };
 }
 
-export function createResourceServer(env: ServiceEnv, db: ServiceDatabase) {
-  const facilitatorClient = new HTTPFacilitatorClient({
-    url: env.FACILITATOR_URL,
-  });
+async function facilitatorSupportsExactNetwork(
+  facilitator: HTTPFacilitatorClient,
+  network: CaipNetwork,
+) {
+  try {
+    const supported = await facilitator.getSupported();
+    return supported.kinds.some((kind) => kind.scheme === "exact" && kind.network === network);
+  } catch (error) {
+    console.warn(
+      `[x402] EURD facilitator unavailable at startup, disabling EURD payments: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return false;
+  }
+}
 
-  const resourceServer = new x402ResourceServer(facilitatorClient);
+export async function createResourceServer(env: ServiceEnv, db: ServiceDatabase) {
+  const usdcFacilitator = new HTTPFacilitatorClient({ url: env.FACILITATOR_URL });
+  const eurdFacilitator = new HTTPFacilitatorClient({ url: env.EURD_FACILITATOR_URL });
+  const eurdEnabled = await facilitatorSupportsExactNetwork(eurdFacilitator, mainnet);
+
+  const resourceServer = new x402ResourceServer(
+    eurdEnabled ? [usdcFacilitator, eurdFacilitator] : [usdcFacilitator],
+  );
   registerExactAvmScheme(resourceServer, {
-    networks: [ALGORAND_TESTNET_CAIP2],
+    networks: eurdEnabled
+      ? [ALGORAND_TESTNET_CAIP2, ALGORAND_MAINNET_QUANTOZ]
+      : [ALGORAND_TESTNET_CAIP2],
   });
 
   resourceServer.onAfterSettle(async () => {
     void db;
   });
 
-  return resourceServer;
+  return {
+    paymentOptions: {
+      usdc: true,
+      eurd: eurdEnabled,
+    } satisfies PaymentOptions,
+    resourceServer,
+  };
 }
 
 export function createPaymentMiddleware(
   env: ServiceEnv,
   db: ServiceDatabase,
   resourceServer: x402ResourceServer,
+  paymentOptions: PaymentOptions,
 ): MiddlewareHandler<{ Variables: ServiceVariables }> {
   const httpServer = new x402HTTPResourceServer(
     resourceServer,
-    createRouteConfig(env),
+    createRouteConfig(env, paymentOptions),
   );
 
   let initPromise: Promise<void> | null = httpServer.initialize();

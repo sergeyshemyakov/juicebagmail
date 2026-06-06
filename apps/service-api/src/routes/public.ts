@@ -40,10 +40,17 @@ import { extractInboundLetterFromScan } from "../lib/inbound-scan-ocr.js";
 import { parseJsonSafe } from "../lib/json.js";
 import { renderOutboundLetterPdf } from "../pdf/outbound-letter-pdf.js";
 import { deliverWebhookEvent } from "../notifications/webhooks.js";
-import type { PaymentFinalizeResult, ServiceVariables } from "../lib/x402.js";
+import type {
+  PaymentFinalizeResult,
+  PaymentOptions,
+  ServiceVariables,
+} from "../lib/x402.js";
 
 type ServiceApp = Hono<{ Variables: ServiceVariables }>;
 type ServiceContext = Context<{ Variables: ServiceVariables }>;
+type ServiceStateWithPaymentOptions = ServiceState & {
+  paymentOptions: PaymentOptions;
+};
 
 function requireAdmin(c: ServiceContext, env: ServiceEnv) {
   const token = getBearerToken(c.req.header("Authorization"));
@@ -194,7 +201,10 @@ async function createInboundLetterRecord({
   };
 }
 
-async function buildServiceState(db: ServiceDatabase): Promise<ServiceState> {
+async function buildServiceState(
+  db: ServiceDatabase,
+  paymentOptions: PaymentOptions,
+): Promise<ServiceStateWithPaymentOptions> {
   const [
     agentRows,
     inboundRows,
@@ -213,6 +223,7 @@ async function buildServiceState(db: ServiceDatabase): Promise<ServiceState> {
   const lastWebhook = webhookRows[0];
 
   return {
+    paymentOptions,
     counters: {
       registeredAgents: agentRows.length,
       pendingInboundLetters: inboundRows.filter((row) => row.status === "pending").length,
@@ -261,7 +272,12 @@ async function buildServiceState(db: ServiceDatabase): Promise<ServiceState> {
   };
 }
 
-export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: ServiceEnv) {
+export function registerPublicRoutes(
+  app: ServiceApp,
+  db: ServiceDatabase,
+  env: ServiceEnv,
+  paymentOptions: PaymentOptions,
+) {
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   app.get("/v1/inbound-letters", async (c) => {
@@ -544,7 +560,7 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
       return unauthorized;
     }
 
-    return c.json(await buildServiceState(db));
+    return c.json(await buildServiceState(db, paymentOptions));
   });
 
   app.post("/internal/inbound-letters/scan-extract", async (c) => {

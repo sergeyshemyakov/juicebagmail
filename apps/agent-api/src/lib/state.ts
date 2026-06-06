@@ -49,6 +49,7 @@ export async function buildAgentState(input: {
     balances: {
       algo: balances.algo,
       usdc: balances.usdc,
+      eurd: balances.eurd,
       address: balances.address,
     },
     inboundLetters: inboundRows.map((row) => ({
@@ -91,6 +92,7 @@ export async function buildAgentState(input: {
           type: lastEvent.type,
           message: lastEvent.message,
           txid: lastEvent.txid ?? undefined,
+          network: lastEvent.network ?? undefined,
           createdAt: lastEvent.createdAt,
         }
       : null,

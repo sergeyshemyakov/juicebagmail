@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   AGENT_PORT,
   ALGOD_TESTNET_URL,
+  ALGOD_MAINNET_URL,
   SERVICE_PORT,
 } from "@juicebag-mail/shared";
 
@@ -15,6 +16,7 @@ const envSchema = z.object({
   VITE_AGENT_UI_TOKEN: z.string().default("juicebag-agent-ui-demo-token"),
   SERVICE_BASE_URL: z.string().url().default(`http://localhost:${SERVICE_PORT}`),
   ALGOD_URL: z.string().url().default(ALGOD_TESTNET_URL),
+  ALGOD_MAINNET_URL: z.string().url().default(ALGOD_MAINNET_URL),
   AGENT_MNEMONIC: z.string().optional(),
   AVM_MNEMONIC: z.string().optional(),
 });

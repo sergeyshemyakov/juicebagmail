@@ -14,7 +14,6 @@ import {
   notificationEnvelopeSchema,
   ROUTE_KEYS,
 } from "@juicebag-mail/shared";
-import type { NotificationEnvelope } from "@juicebag-mail/shared";
 
 import { createAgentDb } from "./db/index.js";
 import {
@@ -104,14 +103,16 @@ app.post("/actions/register", async (c) => {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const result = await juicebag.register(db, parsed.data);
+  const { currency = "usdc" } = parsed.data;
+  const result = await juicebag.register(db, parsed.data, currency);
   const txid = result.payment?.transaction ?? result.registration.x402?.txid;
+  const network = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
   if (txid) {
     await juicebag.recordPayment(db, {
       routeKey: ROUTE_KEYS.registration,
       txid,
-      amountUsd: 1,
-      network: result.payment?.network ?? ALGORAND_TESTNET_CAIP2,
+      amountUsd: currency === "eurd" ? 0.05 : 1,
+      network,
       payTo: "",
     });
   }
@@ -120,6 +121,7 @@ app.post("/actions/register", async (c) => {
     type: "registration.completed",
     message: `Registered mailbox ${result.registration.mailboxId}`,
     txid,
+    network,
   });
 
   void refreshAgentBalances(env).catch(() => {});
@@ -138,8 +140,10 @@ app.post("/actions/send-letter", async (c) => {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const result = await juicebag.sendLetter(db, parsed.data);
+  const { currency: sendCurrency = "usdc" } = parsed.data;
+  const result = await juicebag.sendLetter(db, parsed.data, sendCurrency);
   const txid = result.payment?.transaction ?? result.data.x402?.txid;
+  const sendNetwork = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
 
   await juicebag.syncState(db);
 
@@ -147,8 +151,8 @@ app.post("/actions/send-letter", async (c) => {
     await juicebag.recordPayment(db, {
       routeKey: ROUTE_KEYS.outboundLetter,
       txid,
-      amountUsd: 0.05,
-      network: result.payment?.network ?? ALGORAND_TESTNET_CAIP2,
+      amountUsd: sendCurrency === "eurd" ? 0.01 : 0.05,
+      network: sendNetwork,
       payTo: "",
     });
   }
@@ -157,6 +161,7 @@ app.post("/actions/send-letter", async (c) => {
     type: "letter.sent",
     message: `Queued outbound letter ${result.data.letterId}`,
     txid,
+    network: sendNetwork,
   });
 
   void refreshAgentBalances(env).catch(() => {});
@@ -175,8 +180,10 @@ app.post("/actions/unlock-letter", async (c) => {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const result = await juicebag.unlockLetter(db, parsed.data);
+  const { currency: unlockCurrency = "usdc" } = parsed.data;
+  const result = await juicebag.unlockLetter(db, parsed.data, unlockCurrency);
   const txid = result.payment?.transaction ?? result.data.x402?.txid;
+  const unlockNetwork = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
 
   await db
     .update(inboundLetters)
@@ -192,8 +199,8 @@ app.post("/actions/unlock-letter", async (c) => {
     await juicebag.recordPayment(db, {
       routeKey: ROUTE_KEYS.inboundUnlock,
       txid,
-      amountUsd: 0.2,
-      network: result.payment?.network ?? ALGORAND_TESTNET_CAIP2,
+      amountUsd: unlockCurrency === "eurd" ? 0.02 : 0.2,
+      network: unlockNetwork,
       payTo: "",
     });
   }
@@ -202,6 +209,7 @@ app.post("/actions/unlock-letter", async (c) => {
     type: "letter.unlocked",
     message: `Unlocked inbound letter ${parsed.data.letterId}`,
     txid,
+    network: unlockNetwork,
   });
 
   void refreshAgentBalances(env).catch(() => {});

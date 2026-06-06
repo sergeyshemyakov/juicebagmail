@@ -11,6 +11,7 @@ import {
 import { registerExactAvmScheme } from "@x402-avm/avm/exact/client";
 
 import {
+  ALGORAND_MAINNET_QUANTOZ,
   paymentRecordSchema,
   registrationRequestSchema,
   registrationResponseSchema,
@@ -50,13 +51,27 @@ async function parseResponse<T>(response: Response): Promise<PaidFetchResult<T>>
 }
 
 export function createJuicebagClient(env: AgentEnv) {
-  const client = new x402Client();
-  registerExactAvmScheme(client, {
-    signer: toClientAvmSigner(mnemonicToPrivateKeyBase64(env.mnemonic)),
+  const signer = toClientAvmSigner(mnemonicToPrivateKeyBase64(env.mnemonic));
+
+  const usdcClient = new x402Client();
+  registerExactAvmScheme(usdcClient, {
+    signer,
     algodConfig: { algodUrl: env.ALGOD_URL },
     networks: [ALGORAND_TESTNET_CAIP2],
   });
-  const paidFetch = wrapFetchWithPayment(fetch, client);
+  const usdcPaidFetch = wrapFetchWithPayment(fetch, usdcClient);
+
+  const eurdClient = new x402Client();
+  registerExactAvmScheme(eurdClient, {
+    signer,
+    algodConfig: { algodUrl: env.ALGOD_MAINNET_URL },
+    networks: [ALGORAND_MAINNET_QUANTOZ],
+  });
+  const eurdPaidFetch = wrapFetchWithPayment(fetch, eurdClient);
+
+  function paidFetch(currency: "usdc" | "eurd") {
+    return currency === "eurd" ? eurdPaidFetch : usdcPaidFetch;
+  }
 
   async function getRegistration(db: AgentDatabase) {
     const rows = await db.select().from(registration).where(eq(registration.id, 1)).limit(1);
@@ -75,7 +90,7 @@ export function createJuicebagClient(env: AgentEnv) {
   }
 
   return {
-    async register(db: AgentDatabase, input: AgentRegistrationInput) {
+    async register(db: AgentDatabase, input: AgentRegistrationInput, currency: "usdc" | "eurd" = "usdc") {
       const payload = registrationRequestSchema.parse({
         ...input,
         webhook: {
@@ -86,7 +101,7 @@ export function createJuicebagClient(env: AgentEnv) {
       console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/registrations (x402 — will probe then pay)`);
       let response: Response;
       try {
-        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/registrations`, {
+        response = await paidFetch(currency)(`${env.SERVICE_BASE_URL}/v1/registrations`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -146,7 +161,7 @@ export function createJuicebagClient(env: AgentEnv) {
       };
     },
 
-    async sendLetter(db: AgentDatabase, input: AgentSendLetterInput) {
+    async sendLetter(db: AgentDatabase, input: AgentSendLetterInput, currency: "usdc" | "eurd" = "usdc") {
       const stored = await getRegistration(db);
       if (!stored) {
         throw new Error("Agent is not registered yet");
@@ -155,7 +170,7 @@ export function createJuicebagClient(env: AgentEnv) {
       console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/outbound-letters (x402 — will probe then pay)`);
       let response: Response;
       try {
-        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
+        response = await paidFetch(currency)(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -188,7 +203,7 @@ export function createJuicebagClient(env: AgentEnv) {
       return result;
     },
 
-    async unlockLetter(db: AgentDatabase, input: AgentUnlockLetterInput) {
+    async unlockLetter(db: AgentDatabase, input: AgentUnlockLetterInput, currency: "usdc" | "eurd" = "usdc") {
       const stored = await getRegistration(db);
       if (!stored) {
         throw new Error("Agent is not registered yet");
@@ -197,7 +212,7 @@ export function createJuicebagClient(env: AgentEnv) {
       console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock (x402 — will probe then pay)`);
       let response: Response;
       try {
-        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock`, {
+        response = await paidFetch(currency)(`${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

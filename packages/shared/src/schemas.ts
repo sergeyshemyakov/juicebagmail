@@ -121,12 +121,14 @@ export const agentRegistrationSchema = z.object({
   agentName: z.string().min(1),
   entityType: z.enum(["company", "person"]),
   legalIdentity: legalIdentitySchema,
+  currency: z.enum(["usdc", "eurd"]).default("usdc"),
 });
 
 export const agentSendLetterSchema = z.object({
   recipient: addressSchema,
   subject: z.string().min(1),
   bodyMarkdown: z.string().min(1),
+  currency: z.enum(["usdc", "eurd"]).default("usdc"),
 });
 
 export const agentIgnoreLetterSchema = z.object({
@@ -135,6 +137,7 @@ export const agentIgnoreLetterSchema = z.object({
 
 export const agentUnlockLetterSchema = z.object({
   letterId: z.string(),
+  currency: z.enum(["usdc", "eurd"]).default("usdc"),
 });
 
 export const internalInboundLetterCreateSchema = z.object({
@@ -171,6 +174,7 @@ export const paymentRecordSchema = z.object({
 export const agentBalancesSchema = z.object({
   algo: z.number(),
   usdc: z.number(),
+  eurd: z.number(),
   address: z.string(),
 });
 
@@ -211,12 +215,17 @@ export const agentStateSchema = z.object({
       type: z.string(),
       message: z.string(),
       txid: z.string().optional(),
+      network: z.string().optional(),
       createdAt: z.string(),
     })
     .nullable(),
 });
 
 export const serviceStateSchema = z.object({
+  paymentOptions: z.object({
+    usdc: z.literal(true),
+    eurd: z.boolean(),
+  }),
   counters: z.object({
     registeredAgents: z.number(),
     pendingInboundLetters: z.number(),

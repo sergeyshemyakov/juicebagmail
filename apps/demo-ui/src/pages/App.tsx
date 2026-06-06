@@ -7,7 +7,10 @@ import {
 
 import {
   ALGORAND_EXPLORER_BASE_URL,
+  ALGORAND_MAINNET_EXPLORER_BASE_URL,
+  ALGORAND_MAINNET_QUANTOZ,
   ROUTE_PRICES,
+  ROUTE_PRICES_EURD_DISPLAY,
 } from "@juicebag-mail/shared";
 import type {
   Address,
@@ -49,6 +52,7 @@ const initialRegistration: AgentRegistrationInput = {
     city: "Berlin",
     country: "DE",
   },
+  currency: "usdc",
 };
 
 const initialLetter: AgentSendLetterInput = {
@@ -62,6 +66,7 @@ const initialLetter: AgentSendLetterInput = {
   subject: "Request for clarification",
   bodyMarkdown:
     "Dear Finanzamt,\n\nPlease share the status of our filing.\n\nBest regards,\nAcme Filing Agent",
+  currency: "usdc",
 };
 
 export function App() {
@@ -77,6 +82,8 @@ export function App() {
       setAgentStateInterval(8_000);
     }
   }, [agent.data?.registration, agentStateInterval]);
+
+  const [currency, setCurrency] = useState<"usdc" | "eurd">("usdc");
 
   const [registrationForm, setRegistrationForm] =
     useState<AgentRegistrationInput>(initialRegistration);
@@ -222,8 +229,17 @@ export function App() {
     agentBalances.data ?? agent.data?.balances ?? {
       algo: 0,
       usdc: 0,
+      eurd: 0,
       address: "",
     };
+  const eurdEnabled = service.data?.paymentOptions.eurd ?? false;
+  const selectedCurrency: "usdc" | "eurd" = eurdEnabled ? currency : "usdc";
+
+  useEffect(() => {
+    if (!eurdEnabled && currency === "eurd") {
+      setCurrency("usdc");
+    }
+  }, [currency, eurdEnabled]);
 
   return (
     <div className="app-shell">
@@ -238,9 +254,37 @@ export function App() {
           </p>
         </div>
         <div className="price-strip">
-          <PricePill icon="📮" label="Register" value={ROUTE_PRICES.registration} />
-          <PricePill icon="✉️" label="Send letter" value={ROUTE_PRICES.outboundLetter} />
-          <PricePill icon="📬" label="Receive mail" value={ROUTE_PRICES.inboundUnlock} />
+          <div className="currency-toggle-wrap">
+            <div className="currency-toggle" role="group" aria-label="Payment token">
+              <button
+                className={selectedCurrency === "usdc" ? "currency-toggle-button is-active" : "currency-toggle-button"}
+                aria-pressed={selectedCurrency === "usdc"}
+                onClick={() => setCurrency("usdc")}
+                type="button"
+              >
+                <span className="currency-toggle-label">USDC</span>
+                <span className="currency-toggle-meta">Testnet</span>
+              </button>
+              <button
+                className={selectedCurrency === "eurd" ? "currency-toggle-button is-active" : "currency-toggle-button"}
+                aria-disabled={!eurdEnabled}
+                aria-pressed={selectedCurrency === "eurd"}
+                disabled={!eurdEnabled}
+                onClick={() => setCurrency("eurd")}
+                title={eurdEnabled ? "Pay with EURD on Algorand mainnet" : "EURD unavailable at startup"}
+                type="button"
+              >
+                <span className="currency-toggle-label">EURD</span>
+                <span className="currency-toggle-meta">{eurdEnabled ? "Mainnet" : "Unavailable"}</span>
+              </button>
+            </div>
+            {!eurdEnabled ? (
+              <p className="currency-toggle-note">EURD facilitator was unavailable at startup, so payments stay on USDC.</p>
+            ) : null}
+          </div>
+          <PricePill icon="📮" label="Register" value={selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.registration : ROUTE_PRICES.registration} />
+          <PricePill icon="✉️" label="Send letter" value={selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.outboundLetter : ROUTE_PRICES.outboundLetter} />
+          <PricePill icon="📬" label="Receive mail" value={selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.inboundUnlock : ROUTE_PRICES.inboundUnlock} />
         </div>
       </header>
 
@@ -254,6 +298,7 @@ export function App() {
           <div className="summary-grid">
             <MetricCard label="ALGO balance" symbol="ALGO" value={displayedBalances.algo.toFixed(3)} />
             <MetricCard label="USDC balance" symbol="USDC" value={displayedBalances.usdc.toFixed(3)} />
+            <MetricCard label="EURD balance" symbol="EURD" value={displayedBalances.eurd.toFixed(2)} />
             <MetricCard label="Total sent" value={String(agent.data?.outboundLetters.length ?? 0)} />
             <MetricCard
               label="Total received"
@@ -285,7 +330,7 @@ export function App() {
                 className="stack-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void runAction("register", () => api.registerAgent(registrationForm));
+                  void runAction("register", () => api.registerAgent({ ...registrationForm, currency: selectedCurrency }));
                 }}
               >
                 <LabeledInput
@@ -338,7 +383,7 @@ export function App() {
                   />
                 </div>
                 <ActionButton
-                  label={busyActions.has("register") ? "Registering..." : "Register Mailbox"}
+                  label={busyActions.has("register") ? "Registering..." : `Register Mailbox (${selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.registration : ROUTE_PRICES.registration})`}
                   disabled={busyActions.has("register")}
                 />
               </form>
@@ -350,7 +395,7 @@ export function App() {
               className="stack-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void runAction("send-letter", () => api.sendLetter(letterForm));
+                void runAction("send-letter", () => api.sendLetter({ ...letterForm, currency: selectedCurrency }));
               }}
             >
               <LabeledInput
@@ -394,7 +439,7 @@ export function App() {
                 />
               </label>
               <ActionButton
-                label={busyActions.has("send-letter") ? "Sending..." : `Send letter (${ROUTE_PRICES.outboundLetter})`}
+                label={busyActions.has("send-letter") ? "Sending..." : `Send letter (${selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.outboundLetter : ROUTE_PRICES.outboundLetter})`}
                 disabled={busyActions.has("send-letter") || !agent.data?.registration}
               />
             </form>
@@ -423,11 +468,11 @@ export function App() {
                         disabled={busyActions.has(`unlock-${letter.id}`)}
                         onClick={() =>
                           void runAction(`unlock-${letter.id}`, () =>
-                            api.unlockLetter(letter.id),
+                            api.unlockLetter(letter.id, selectedCurrency),
                           )
                         }
                       >
-                        Get full ({ROUTE_PRICES.inboundUnlock})
+                        Get full ({selectedCurrency === "eurd" ? ROUTE_PRICES_EURD_DISPLAY.inboundUnlock : ROUTE_PRICES.inboundUnlock})
                       </button>
                     )}
                     {letter.agentStatus === "pending" && (
@@ -479,6 +524,7 @@ export function App() {
             title="Latest Agent x402 Event"
             message={currentAgentEvent?.message ?? "Waiting for the first agent event."}
             txid={currentAgentEvent && "txid" in currentAgentEvent ? currentAgentEvent.txid : undefined}
+            network={currentAgentEvent && "network" in currentAgentEvent ? currentAgentEvent.network as string | undefined : undefined}
           />
         </section>
 
@@ -502,6 +548,7 @@ export function App() {
               value={String(service.data?.counters.queuedOutboundLetters ?? 0)}
             />
             <MetricCard label="USDC balance" symbol="USDC" value={(serviceBalances.data?.usdc ?? 0).toFixed(3)} />
+            <MetricCard label="EURD balance" symbol="EURD" value={(serviceBalances.data?.eurd ?? 0).toFixed(2)} />
             <MetricCard label="Total sent" value={String(service.data?.outboundLetters.length ?? 0)} />
             <MetricCard label="Total received" value={String(service.data?.inboundLetters.length ?? 0)} />
           </div>
@@ -849,12 +896,12 @@ function Card(props: { title: string; children: ReactNode }) {
   );
 }
 
-function EventCard(props: { title: string; message: string; txid?: string }) {
+function EventCard(props: { title: string; message: string; txid?: string; network?: string }) {
   return (
     <Card title={props.title}>
       <div className="event-card">
         <p>{props.message}</p>
-        <TxLink txid={props.txid} />
+        <TxLink txid={props.txid} network={props.network} />
       </div>
     </Card>
   );
@@ -895,15 +942,19 @@ function StatusBadge(props: { status: string }) {
   return <span className={`status-badge status-${props.status}`}>{props.status}</span>;
 }
 
-function TxLink(props: { txid?: string }) {
+function TxLink(props: { txid?: string; network?: string }) {
   if (!props.txid) {
     return <span className="muted">No txid yet</span>;
   }
 
+  const base = props.network === ALGORAND_MAINNET_QUANTOZ
+    ? ALGORAND_MAINNET_EXPLORER_BASE_URL
+    : ALGORAND_EXPLORER_BASE_URL;
+
   return (
     <a
       className="tx-link"
-      href={`${ALGORAND_EXPLORER_BASE_URL}${props.txid}`}
+      href={`${base}${props.txid}`}
       rel="noreferrer"
       target="_blank"
     >

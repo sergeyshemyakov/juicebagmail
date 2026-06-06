@@ -55,6 +55,7 @@ export const events = sqliteTable("events", {
   type: text("type").notNull(),
   message: text("message").notNull(),
   txid: text("txid"),
+  network: text("network"),
   createdAt: text("created_at").notNull(),
 });
 

@@ -4,6 +4,7 @@ import { fetchBalances, mnemonicToAddress } from "./wallet.js";
 type AgentBalances = {
   algo: number;
   usdc: number;
+  eurd: number;
   address: string;
 };
 
@@ -14,6 +15,7 @@ function defaultBalances(address: string): AgentBalances {
   return {
     algo: 0,
     usdc: 0,
+    eurd: 0,
     address,
   };
 }
@@ -30,7 +32,7 @@ export function refreshAgentBalances(env: AgentEnv) {
     return existing;
   }
 
-  const refresh = fetchBalances(address, env.ALGOD_URL)
+  const refresh = fetchBalances(address, env.ALGOD_URL, env.ALGOD_MAINNET_URL)
     .then((next) => {
       const parsed: AgentBalances = {
         ...next,

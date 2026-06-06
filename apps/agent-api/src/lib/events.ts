@@ -10,6 +10,7 @@ type PublishableEvent = {
   type: AgentEvent["type"];
   message: string;
   txid?: string;
+  network?: string;
   id?: string;
   createdAt?: string;
 };
@@ -29,6 +30,7 @@ export function createEventBus(db: AgentDatabase) {
       type: fullEvent.type,
       message: fullEvent.message,
       txid: "txid" in fullEvent ? fullEvent.txid ?? null : null,
+      network: event.network ?? null,
       createdAt: fullEvent.createdAt,
     });
 

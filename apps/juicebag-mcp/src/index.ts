@@ -6,6 +6,11 @@ import {
 } from "@juicebag-mail/shared";
 import { z } from "zod";
 
+const currencySchema = z
+  .enum(["usdc", "eurd"])
+  .default("usdc")
+  .describe('Payment currency: "usdc" for USDC on Algorand testnet, "eurd" for EURD on Algorand mainnet. Ask the user which to use before any paid action.');
+
 const agentApiUrl = process.env.AGENT_API_URL ?? "http://localhost:4022";
 const agentUiToken =
   process.env.VITE_AGENT_UI_TOKEN ?? "juicebag-agent-ui-demo-token";
@@ -53,7 +58,10 @@ server.registerTool(
   "register_mailbox",
   {
     description: "Register the agent with Juicebag Mail and pay the mailbox setup fee.",
-    inputSchema: agentRegistrationSchema.shape,
+    inputSchema: {
+      ...agentRegistrationSchema.shape,
+      currency: currencySchema,
+    },
   },
   async (args) => {
     const result = await request("/actions/register", {
@@ -103,7 +111,10 @@ server.registerTool(
   "send_letter",
   {
     description: "Pay Juicebag Mail to print and send a physical letter.",
-    inputSchema: agentSendLetterSchema.shape,
+    inputSchema: {
+      ...agentSendLetterSchema.shape,
+      currency: currencySchema,
+    },
   },
   async (args) => {
     const result = await request("/actions/send-letter", {
@@ -123,6 +134,7 @@ server.registerTool(
     description: "Pay to unlock the OCR text for a pending inbound letter.",
     inputSchema: {
       letterId: z.string().describe("Inbound letter id"),
+      currency: currencySchema,
     },
   },
   async (args) => {

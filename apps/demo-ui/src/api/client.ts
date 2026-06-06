@@ -6,6 +6,13 @@ import type {
   ServiceState,
 } from "@juicebag-mail/shared";
 
+type ServiceStateWithPaymentOptions = ServiceState & {
+  paymentOptions: {
+    usdc: true;
+    eurd: boolean;
+  };
+};
+
 const agentApiUrl = import.meta.env.AGENT_API_URL ?? "http://localhost:4022";
 const serviceApiUrl = import.meta.env.SERVICE_API_URL ?? "http://localhost:4021";
 const agentUiToken =
@@ -65,14 +72,14 @@ export const api = {
       body: JSON.stringify(input),
     });
   },
-  unlockLetter(letterId: string) {
+  unlockLetter(letterId: string, currency: "usdc" | "eurd" = "usdc") {
     return request<AgentState>(`${agentApiUrl}/actions/unlock-letter`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${agentUiToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ letterId }),
+      body: JSON.stringify({ letterId, currency }),
     });
   },
   ignoreLetter(letterId: string) {
@@ -86,14 +93,14 @@ export const api = {
     });
   },
   getServiceState() {
-    return request<ServiceState>(`${serviceApiUrl}/internal/state`, {
+    return request<ServiceStateWithPaymentOptions>(`${serviceApiUrl}/internal/state`, {
       headers: {
         Authorization: `Bearer ${adminUiToken}`,
       },
     });
   },
   getServiceBalances() {
-    return request<{ usdc: number; address: string }>(`${serviceApiUrl}/internal/balances`, {
+    return request<{ usdc: number; eurd: number; address: string }>(`${serviceApiUrl}/internal/balances`, {
       headers: {
         Authorization: `Bearer ${adminUiToken}`,
       },

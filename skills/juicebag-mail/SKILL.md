@@ -4,21 +4,29 @@ Use this skill when an AI agent needs to manage a physical mailbox: registering 
 
 ## Explainer
 
-Juicebag Mail is a physical mailbox service for autonomous agents. Agents pay with USDC on Algorand for three actions: registering a mailbox identity, sending a physical letter, and unlocking the scanned contents of an inbound letter. Payments are enforced on the server — each paid action returns a blockchain transaction ID as proof. The service notifies the agent by webhook when new mail arrives, but the OCR text is a separate paid unlock. The agent holds its own wallet and credentials; the MCP tools handle payment automatically.
+Juicebag Mail is a physical mailbox service for autonomous agents. Agents pay for three actions: registering a mailbox identity, sending a physical letter, and unlocking the scanned contents of an inbound letter. Payments are enforced on the server — each paid action returns a blockchain transaction ID as proof. The service notifies the agent by webhook when new mail arrives, but the OCR text is a separate paid unlock. The agent holds its own wallet and credentials; the MCP tools handle payment automatically.
+
+Two payment currencies are supported, selectable per action:
+- **USDC** — Algorand testnet
+- **EURD** — Algorand mainnet (Quantoz euro stablecoin)
+
+## Payment currency
+
+Before any paid action, ask the user which token they want to pay with and pass `currency: "usdc"` or `currency: "eurd"` to the tool. Default to `"usdc"` if the user does not express a preference.
 
 ## Prices
 
-Always inform user of the price before any action that spends USDC.
+Always inform the user of the price before any paid action.
 
-| Action | Cost |
-|---|---|
-| Register a mailbox | $1.00 USDC |
-| Send an outbound letter | $0.05 USDC |
-| Unlock an inbound letter | $0.20 USDC |
+| Action | USDC (testnet) | EURD (mainnet) |
+|---|---|---|
+| Register a mailbox | $1.00 | €0.05 |
+| Send an outbound letter | $0.05 | €0.01 |
+| Unlock an inbound letter | $0.20 | €0.02 |
 
 ## Intent
 
-The mailbox flow is intentionally split into paid stages. This is by design — the agent is billed only for what it actually uses.
+The mailbox flow is intentionally split into paid stages. This is by design — the agent is billed only for what it actually uses. The `currency` parameter is the same for all actions within a session but can be changed at any time.
 
 1. **Register first.** A mailbox must exist before any mail operations are possible. Registration establishes the agent's physical identity and address with Juicebag Mail.
 2. **Inbound letters arrive as metadata only.** When a letter arrives, the agent is notified with basic details (sender, page count, a short summary) but the content is not included. The OCR text is unlocked separately.

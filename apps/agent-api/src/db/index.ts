@@ -68,6 +68,7 @@ export function createAgentDb(dbPath: string) {
       type TEXT NOT NULL,
       message TEXT NOT NULL,
       txid TEXT,
+      network TEXT,
       created_at TEXT NOT NULL
     );
 
