@@ -20,7 +20,7 @@ Always inform the user of the price before any paid action.
 
 | Action | USDC (testnet) | EURD (mainnet) |
 |---|---|---|
-| Register a mailbox | $1.00 | €0.05 |
+| Register a mailbox | $1.00 | €0.04 |
 | Send an outbound letter | $0.05 | €0.01 |
 | Unlock an inbound letter | $0.20 | €0.02 |
 

@@ -261,6 +261,7 @@ async function buildServiceState(
       ? {
           message: `Settled ${lastPayment.routeKey} payment`,
           txid: lastPayment.txid,
+          network: lastPayment.network,
           createdAt: lastPayment.createdAt,
         }
       : lastWebhook

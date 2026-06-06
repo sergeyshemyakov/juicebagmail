@@ -1,5 +1,6 @@
 import { decodePaymentResponseHeader, x402HTTPResourceServer } from "@x402-avm/core/http";
 import { HTTPFacilitatorClient } from "@x402-avm/core/server";
+import { SettleError } from "@x402-avm/core/types";
 import { HonoAdapter, x402ResourceServer } from "@x402-avm/hono";
 import { registerExactAvmScheme } from "@x402-avm/avm/exact/server";
 import {
@@ -12,7 +13,7 @@ import {
   ROUTE_PRICES,
   ROUTE_PRICES_EURD,
 } from "@juicebag-mail/shared";
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler, Next } from "hono";
 
 import { createId, nowIso } from "./ids.js";
 import { payments } from "../db/schema.js";
@@ -42,8 +43,144 @@ export type PaymentOptions = {
 };
 
 type CaipNetwork = `${string}:${string}`;
+type SupportedResponse = Awaited<ReturnType<HTTPFacilitatorClient["getSupported"]>>;
+type VerifyResponse = Awaited<ReturnType<HTTPFacilitatorClient["verify"]>>;
+type SettleResponse = Awaited<ReturnType<HTTPFacilitatorClient["settle"]>>;
+type QuantozSupportedScheme = {
+  scheme: string;
+  network: CaipNetwork;
+  [key: string]: unknown;
+};
 const testnet = ALGORAND_TESTNET_CAIP2 as CaipNetwork;
 const mainnet = ALGORAND_MAINNET_QUANTOZ as CaipNetwork;
+
+function toJsonSafe(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (_, nestedValue) =>
+      typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue,
+    ),
+  );
+}
+
+function encodeBase64UrlJson(value: unknown) {
+  return Buffer.from(JSON.stringify(toJsonSafe(value)), "utf8")
+    .toString("base64url");
+}
+
+function toQuantozPaymentPayload(
+  paymentPayload: Parameters<HTTPFacilitatorClient["settle"]>[0],
+) {
+  const normalized = toJsonSafe(paymentPayload) as Record<string, unknown>;
+  const accepted =
+    typeof normalized.accepted === "object" && normalized.accepted !== null
+      ? (normalized.accepted as Record<string, unknown>)
+      : {};
+  const payload =
+    typeof normalized.payload === "object" && normalized.payload !== null
+      ? { ...(normalized.payload as Record<string, unknown>) }
+      : {};
+  const paymentGroup = Array.isArray(payload.paymentGroup) ? payload.paymentGroup : [];
+  const paymentIndex =
+    typeof payload.paymentIndex === "number" ? payload.paymentIndex : 0;
+
+  if (!("transaction" in payload) && typeof paymentGroup[paymentIndex] === "string") {
+    payload.transaction = paymentGroup[paymentIndex];
+  }
+
+  return {
+    ...normalized,
+    scheme: accepted.scheme,
+    network: accepted.network,
+    payload,
+  };
+}
+
+class QuantozFacilitatorClient extends HTTPFacilitatorClient {
+  override async getSupported(): Promise<SupportedResponse> {
+    const raw = (await super.getSupported()) as unknown;
+
+    if (
+      typeof raw === "object" &&
+      raw !== null &&
+      "kinds" in raw &&
+      Array.isArray(raw.kinds)
+    ) {
+      return raw as SupportedResponse;
+    }
+
+    if (
+      typeof raw === "object" &&
+      raw !== null &&
+      "schemes" in raw &&
+      Array.isArray(raw.schemes)
+    ) {
+      const schemes = raw.schemes as QuantozSupportedScheme[];
+
+      return {
+        kinds: schemes.map(({ scheme, network, ...extra }) => ({
+          x402Version: 2,
+          scheme,
+          network,
+          ...(Object.keys(extra).length > 0 ? { extra } : {}),
+        })),
+        extensions: [],
+        signers: {},
+      };
+    }
+
+    throw new Error("Unsupported Quantoz /supported response shape");
+  }
+
+  override async verify(
+    _paymentPayload: Parameters<HTTPFacilitatorClient["verify"]>[0],
+    _paymentRequirements: Parameters<HTTPFacilitatorClient["verify"]>[1],
+  ): Promise<VerifyResponse> {
+    // Quantoz's exact scheme combines verify+settle into a single /settle call.
+    // We skip pre-verification and let settle do the real check.
+    return { isValid: true } as VerifyResponse;
+  }
+
+  override async settle(
+    paymentPayload: Parameters<HTTPFacilitatorClient["settle"]>[0],
+    paymentRequirements: Parameters<HTTPFacilitatorClient["settle"]>[1],
+  ): Promise<SettleResponse> {
+    const response = await fetch(`${this.url}/settle`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        x402Version: paymentPayload.x402Version,
+        paymentPayload: encodeBase64UrlJson(toQuantozPaymentPayload(paymentPayload)),
+        paymentRequirements: toJsonSafe(paymentRequirements),
+      }),
+    });
+
+    const responseText = await response.text();
+    console.log(`[Quantoz /settle] status=${response.status} body=${responseText}`);
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      throw new SettleError(response.status, {
+        success: false,
+        errorReason: "invalid_response",
+        transaction: "",
+      } as unknown as SettleResponse);
+    }
+
+    if (!response.ok) {
+      throw new SettleError(response.status, data as unknown as SettleResponse);
+    }
+
+    return {
+      ...data,
+      success: true,
+      transaction: typeof data.txHash === "string" ? data.txHash : "",
+    } as unknown as SettleResponse;
+  }
+}
 
 export function createRouteConfig(env: ServiceEnv, paymentOptions: PaymentOptions) {
   return {
@@ -120,7 +257,7 @@ export function createRouteConfig(env: ServiceEnv, paymentOptions: PaymentOption
 }
 
 async function facilitatorSupportsExactNetwork(
-  facilitator: HTTPFacilitatorClient,
+  facilitator: Pick<HTTPFacilitatorClient, "getSupported">,
   network: CaipNetwork,
 ) {
   try {
@@ -138,7 +275,7 @@ async function facilitatorSupportsExactNetwork(
 
 export async function createResourceServer(env: ServiceEnv, db: ServiceDatabase) {
   const usdcFacilitator = new HTTPFacilitatorClient({ url: env.FACILITATOR_URL });
-  const eurdFacilitator = new HTTPFacilitatorClient({ url: env.EURD_FACILITATOR_URL });
+  const eurdFacilitator = new QuantozFacilitatorClient({ url: env.EURD_FACILITATOR_URL });
   const eurdEnabled = await facilitatorSupportsExactNetwork(eurdFacilitator, mainnet);
 
   const resourceServer = new x402ResourceServer(
@@ -176,7 +313,7 @@ export function createPaymentMiddleware(
 
   let initPromise: Promise<void> | null = httpServer.initialize();
 
-  return async (c, next) => {
+  return async (c: Context<{ Variables: ServiceVariables }>, next: Next) => {
     const adapter = new HonoAdapter(c);
     const requestContext = {
       adapter,

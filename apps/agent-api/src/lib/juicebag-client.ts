@@ -61,10 +61,34 @@ export function createJuicebagClient(env: AgentEnv) {
   });
   const usdcPaidFetch = wrapFetchWithPayment(fetch, usdcClient);
 
+  // x402-avm uses `suggestedParams.fee ?? minFee` which keeps 0 (algod returns fee=0 at min load).
+  // Wrap the algod client to always return fee=minFee so the transaction isn't built with 0 fees.
+  const eurdAlgodClient = {
+    suggestedParams: async () => {
+      const res = await fetch(`${env.ALGOD_MAINNET_URL}/v2/transactions/params`);
+      const data = await res.json() as {
+        fee: number;
+        "min-fee": number;
+        "last-round": number;
+        "genesis-hash": string;
+        "genesis-id": string;
+      };
+      const minFee = BigInt(data["min-fee"] ?? 1000);
+      return {
+        fee: minFee,
+        minFee,
+        firstValid: BigInt(data["last-round"]),
+        lastValid: BigInt(data["last-round"]) + BigInt(1000),
+        genesisHash: new Uint8Array(Buffer.from(data["genesis-hash"], "base64")),
+        genesisId: data["genesis-id"],
+      };
+    },
+  };
+
   const eurdClient = new x402Client();
   registerExactAvmScheme(eurdClient, {
     signer,
-    algodConfig: { algodUrl: env.ALGOD_MAINNET_URL },
+    algodConfig: { algodClient: eurdAlgodClient },
     networks: [ALGORAND_MAINNET_QUANTOZ],
   });
   const eurdPaidFetch = wrapFetchWithPayment(fetch, eurdClient);

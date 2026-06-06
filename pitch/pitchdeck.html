@@ -179,6 +179,12 @@
       gap: 18px;
     }
 
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+    }
+
     .stack { display: flex; flex-direction: column; gap: 22px; }
     .stack-tight { display: flex; flex-direction: column; gap: 14px; }
 
@@ -528,6 +534,36 @@
       text-underline-offset: 3px;
     }
     a.caya-link:hover { color: #b45309; }
+
+    .demo-popup {
+      position: absolute;
+      top: 22px;
+      right: 22px;
+      z-index: 10;
+      background: #f7c948;
+      color: #231f20;
+      border-radius: 18px;
+      padding: 16px 24px;
+      font-size: 19px;
+      font-weight: 950;
+      letter-spacing: -0.01em;
+      line-height: 1.2;
+      text-align: center;
+      box-shadow: 0 8px 28px rgba(35,31,32,.30), 0 0 0 3px #231f20;
+      transform: rotate(2deg);
+      animation: popup-bounce 2.4s ease-in-out infinite;
+    }
+    .demo-popup a {
+      color: #231f20;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 2px;
+    }
+    .demo-popup a:hover { color: #5a3e00; }
+    @keyframes popup-bounce {
+      0%, 100% { transform: rotate(2deg) translateY(0); }
+      50% { transform: rotate(2deg) translateY(-5px); }
+    }
   </style>
 </head>
 <body>
@@ -559,6 +595,9 @@
           <div class="carton"><div class="carton-face">PAPER<br/>MAIL<br/>FOR<br/>AGENTS</div></div>
           <div class="stamp">✉️</div>
         </div>
+      </div>
+      <div class="demo-popup">
+        <a href="https://drive.google.com/file/d/1A5ojSIJ3fCmVwbay1mOZybQ_TWTKKvNz/view?usp=sharing" target="_blank" rel="noopener">CLICK ME<br>FOR DEMO!</a>
       </div>
       <div class="footer-line"><span>Juicebag Mail</span><span class="progress"></span></div>
     </section>
@@ -640,8 +679,9 @@
       <div class="content stack">
         <div class="eyebrow">📈 Market Validation & Scalability</div>
         <h2>Proven legality. <span class="accent">Agent-scale interface.</span></h2>
-        <div class="grid-3" style="margin-top: 8px;">
+        <div class="grid-4" style="margin-top: 8px;">
           <div class="card metric"><div class="emoji">✅</div><strong>Validated category</strong><span>Platforms like <a class="caya-link" href="https://caya.com" target="_blank" rel="noopener">caya.com</a> show that mail forwarding, scanning, and document workflows are useful enough to sell.</span></div>
+          <div class="card metric"><div class="emoji">€</div><strong>EURD support</strong><span>Companies in EU might be legally required to operate with EUR, not USD. Juicebag Mail natively supports payments in EURD stablecoin, in addition to USDC.</span></div>
           <div class="card metric"><div class="emoji">🏢</div><strong>B2B first</strong><span>Startups, SMEs, decentralized orgs, founders, and back-office teams have recurring mail pain.</span></div>
           <div class="card metric"><div class="emoji">🧍</div><strong>Accessible by design</strong><span>Pay-as-you-go pricing also works for individuals, expats, and solo operators.</span></div>
         </div>

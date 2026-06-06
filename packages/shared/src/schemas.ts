@@ -248,6 +248,7 @@ export const serviceStateSchema = z.object({
     .object({
       message: z.string(),
       txid: z.string().optional(),
+      network: z.string().optional(),
       createdAt: z.string(),
     })
     .nullable(),

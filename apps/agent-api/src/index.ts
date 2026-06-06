@@ -12,6 +12,7 @@ import {
   agentSendLetterSchema,
   agentUnlockLetterSchema,
   notificationEnvelopeSchema,
+  ALGORAND_MAINNET_QUANTOZ,
   ROUTE_KEYS,
 } from "@juicebag-mail/shared";
 
@@ -106,7 +107,7 @@ app.post("/actions/register", async (c) => {
   const { currency = "usdc" } = parsed.data;
   const result = await juicebag.register(db, parsed.data, currency);
   const txid = result.payment?.transaction ?? result.registration.x402?.txid;
-  const network = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
+  const network = result.payment?.network ?? (currency === "eurd" ? ALGORAND_MAINNET_QUANTOZ : ALGORAND_TESTNET_CAIP2);
   if (txid) {
     await juicebag.recordPayment(db, {
       routeKey: ROUTE_KEYS.registration,
@@ -143,7 +144,7 @@ app.post("/actions/send-letter", async (c) => {
   const { currency: sendCurrency = "usdc" } = parsed.data;
   const result = await juicebag.sendLetter(db, parsed.data, sendCurrency);
   const txid = result.payment?.transaction ?? result.data.x402?.txid;
-  const sendNetwork = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
+  const sendNetwork = result.payment?.network ?? (sendCurrency === "eurd" ? ALGORAND_MAINNET_QUANTOZ : ALGORAND_TESTNET_CAIP2);
 
   await juicebag.syncState(db);
 
@@ -183,7 +184,7 @@ app.post("/actions/unlock-letter", async (c) => {
   const { currency: unlockCurrency = "usdc" } = parsed.data;
   const result = await juicebag.unlockLetter(db, parsed.data, unlockCurrency);
   const txid = result.payment?.transaction ?? result.data.x402?.txid;
-  const unlockNetwork = result.payment?.network ?? ALGORAND_TESTNET_CAIP2;
+  const unlockNetwork = result.payment?.network ?? (unlockCurrency === "eurd" ? ALGORAND_MAINNET_QUANTOZ : ALGORAND_TESTNET_CAIP2);
 
   await db
     .update(inboundLetters)

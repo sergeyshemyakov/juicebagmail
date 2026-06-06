@@ -784,6 +784,7 @@ export function App() {
             title="Latest Ops x402 Event"
             message={currentServiceEvent?.message ?? "Waiting for the first service event."}
             txid={currentServiceEvent?.txid}
+            network={currentServiceEvent?.network}
           />
         </section>
       </main>

@@ -6,13 +6,13 @@ export const ROUTE_PRICES = {
 
 export const EURD_ASA_ID = "1221682136";
 export const ROUTE_PRICES_EURD = {
-  registration:   { amount: "5", asset: EURD_ASA_ID },
+  registration:   { amount: "4", asset: EURD_ASA_ID },
   outboundLetter: { amount: "1", asset: EURD_ASA_ID },
   inboundUnlock:  { amount: "2", asset: EURD_ASA_ID },
 } as const;
 
 export const ROUTE_PRICES_EURD_DISPLAY = {
-  registration:   "€0.05",
+  registration:   "€0.04",
   outboundLetter: "€0.01",
   inboundUnlock:  "€0.02",
 } as const;

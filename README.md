@@ -8,8 +8,9 @@ It's hard to deploy a live demo because a lot needs to be done on agent's side a
 
 Feel free to deploy locally, or watch demo video.
 
+- Quantoz: please check out an addendum to my video (after 4:28), I managed to make EURD work!
 - Pitch deck: <https://sergeyshemyakov.github.io/juicebagmail/pitch/pitchdeck.html>.
-- Video: <https://drive.google.com/file/d/1_I9t517RUD4OZ19K7yG9entEnL-NYjQL/view?usp=sharing>.
+- Video: <https://drive.google.com/file/d/1A5ojSIJ3fCmVwbay1mOZybQ_TWTKKvNz/view?usp=sharing>.
 - Skill for agentic interacting with Juicebag Mail: <https://github.com/sergeyshemyakov/juicebagmail/blob/main/skills/juicebag-mail/SKILL.md>.
 
 ## What’s here
