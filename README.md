@@ -2,6 +2,16 @@
 
 Algorand agentic commerce hackathon project for June 2026.
 
+# Links
+
+It's hard to deploy a live demo because a lot needs to be done on agent's side and UI dashboard is much harder to setup properly. 
+
+Feel free to deploy locally, or watch demo video.
+
+- Pitch deck: <https://sergeyshemyakov.github.io/juicebagmail/pitch/pitchdeck.html>.
+- Video: <https://drive.google.com/file/d/1_I9t517RUD4OZ19K7yG9entEnL-NYjQL/view?usp=sharing>.
+- Skill for agentic interacting with Juicebag Mail: <https://github.com/sergeyshemyakov/juicebagmail/blob/main/skills/juicebag-mail/SKILL.md>.
+
 ## What’s here
 
 - `apps/service-api`: Juicebag Mail seller service with SQLite state, webhook delivery, local file storage, and three x402-paid routes.
