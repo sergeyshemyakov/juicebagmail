@@ -1,0 +1,348 @@
+import { and, desc, eq } from "drizzle-orm";
+import {
+  decodePaymentResponseHeader,
+  wrapFetchWithPayment,
+  x402Client,
+} from "@x402-avm/fetch";
+import {
+  ALGORAND_TESTNET_CAIP2,
+  toClientAvmSigner,
+} from "@x402-avm/avm";
+import { registerExactAvmScheme } from "@x402-avm/avm/exact/client";
+
+import {
+  paymentRecordSchema,
+  registrationRequestSchema,
+  registrationResponseSchema,
+} from "@juicebag-mail/shared";
+import type {
+  AgentRegistrationInput,
+  AgentSendLetterInput,
+  AgentUnlockLetterInput,
+  InboundLetterMetadata,
+  OutboundLetterMetadata,
+  RegistrationResponse,
+} from "@juicebag-mail/shared";
+
+import type { AgentDatabase } from "../db/index.js";
+import {
+  inboundLetters,
+  outboundLetters,
+  payments,
+  registration,
+} from "../db/schema.js";
+import type { AgentEnv } from "./env.js";
+import { createId, nowIso } from "./ids.js";
+import { mnemonicToPrivateKeyBase64 } from "./wallet.js";
+
+type PaidFetchResult<T> = {
+  data: T;
+  payment?: ReturnType<typeof decodePaymentResponseHeader>;
+};
+
+async function parseResponse<T>(response: Response): Promise<PaidFetchResult<T>> {
+  const body = (await response.json()) as T;
+  const paymentHeader = response.headers.get("PAYMENT-RESPONSE");
+  return {
+    data: body,
+    payment: paymentHeader ? decodePaymentResponseHeader(paymentHeader) : undefined,
+  };
+}
+
+export function createJuicebagClient(env: AgentEnv) {
+  const client = new x402Client();
+  registerExactAvmScheme(client, {
+    signer: toClientAvmSigner(mnemonicToPrivateKeyBase64(env.mnemonic)),
+    algodConfig: { algodUrl: env.ALGOD_URL },
+    networks: [ALGORAND_TESTNET_CAIP2],
+  });
+  const paidFetch = wrapFetchWithPayment(fetch, client);
+
+  async function getRegistration(db: AgentDatabase) {
+    const rows = await db.select().from(registration).where(eq(registration.id, 1)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async function authHeaders(db: AgentDatabase) {
+    const stored = await getRegistration(db);
+    if (!stored) {
+      throw new Error("Agent is not registered yet");
+    }
+
+    return {
+      Authorization: `Bearer ${stored.agentAuthToken}`,
+    };
+  }
+
+  return {
+    async register(db: AgentDatabase, input: AgentRegistrationInput) {
+      const payload = registrationRequestSchema.parse({
+        ...input,
+        webhook: {
+          url: `${env.AGENT_BASE_URL}/webhooks/incoming-mail`,
+        },
+      });
+
+      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/registrations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Registration failed with status ${response.status}`);
+      }
+
+      const { data, payment } = await parseResponse<RegistrationResponse>(response);
+      const parsed = registrationResponseSchema.parse(data);
+
+      await db
+        .insert(registration)
+        .values({
+          id: 1,
+          agentId: parsed.agentId,
+          mailboxId: parsed.mailboxId,
+          agentAuthToken: parsed.agentAuthToken,
+          webhookSecret: parsed.webhook.secret,
+          agentName: input.agentName,
+          entityType: input.entityType,
+          legalIdentityJson: JSON.stringify(input.legalIdentity),
+          webhookUrl: `${env.AGENT_BASE_URL}/webhooks/incoming-mail`,
+          registeredAt: nowIso(),
+        })
+        .onConflictDoUpdate({
+          target: registration.id,
+          set: {
+            agentId: parsed.agentId,
+            mailboxId: parsed.mailboxId,
+            agentAuthToken: parsed.agentAuthToken,
+            webhookSecret: parsed.webhook.secret,
+            agentName: input.agentName,
+            entityType: input.entityType,
+            legalIdentityJson: JSON.stringify(input.legalIdentity),
+            webhookUrl: `${env.AGENT_BASE_URL}/webhooks/incoming-mail`,
+            registeredAt: nowIso(),
+          },
+        });
+
+      return {
+        registration: parsed,
+        payment,
+      };
+    },
+
+    async sendLetter(db: AgentDatabase, input: AgentSendLetterInput) {
+      const stored = await getRegistration(db);
+      if (!stored) {
+        throw new Error("Agent is not registered yet");
+      }
+
+      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders(db)),
+        },
+        body: JSON.stringify({
+          mailboxId: stored.mailboxId,
+          recipient: input.recipient,
+          subject: input.subject,
+          bodyMarkdown: input.bodyMarkdown,
+          sendMode: "standard",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Send letter failed with status ${response.status}`);
+      }
+
+      return parseResponse<{ letterId: string; status: "queued"; x402?: { txid?: string } }>(response);
+    },
+
+    async unlockLetter(db: AgentDatabase, input: AgentUnlockLetterInput) {
+      const stored = await getRegistration(db);
+      if (!stored) {
+        throw new Error("Agent is not registered yet");
+      }
+
+      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await authHeaders(db)),
+        },
+        body: JSON.stringify({
+          mailboxId: stored.mailboxId,
+          letterId: input.letterId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Unlock failed with status ${response.status}`);
+      }
+
+      return parseResponse<{
+        letterId: string;
+        status: "unlocked";
+        from: string;
+        receivedAt: string;
+        ocrText: string;
+        x402?: { txid?: string };
+      }>(response);
+    },
+
+    async fetchInboundLetters(db: AgentDatabase) {
+      const response = await fetch(`${env.SERVICE_BASE_URL}/v1/inbound-letters`, {
+        headers: await authHeaders(db),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch inbound letters: ${response.status}`);
+      }
+      return (await response.json()) as InboundLetterMetadata[];
+    },
+
+    async fetchOutboundLetters(db: AgentDatabase) {
+      const response = await fetch(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
+        headers: await authHeaders(db),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch outbound letters: ${response.status}`);
+      }
+      return (await response.json()) as OutboundLetterMetadata[];
+    },
+
+    async fetchNotifications(db: AgentDatabase, cursor?: string) {
+      const response = await fetch(
+        `${env.SERVICE_BASE_URL}/v1/notifications${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        {
+          headers: await authHeaders(db),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to fetch notifications: ${response.status}`);
+      }
+      return (await response.json()) as {
+        notifications: unknown[];
+        nextCursor: string | null;
+      };
+    },
+
+    async recordPayment(db: AgentDatabase, input: {
+      routeKey: string;
+      txid: string;
+      amountUsd: number;
+      network: string;
+      payTo: string;
+    }) {
+      const row = paymentRecordSchema.parse({
+        id: createId("pay"),
+        routeKey: input.routeKey,
+        txid: input.txid,
+        amountUsd: input.amountUsd,
+        network: input.network,
+        payTo: input.payTo,
+        status: "settled",
+        createdAt: nowIso(),
+      });
+
+      await db.insert(payments).values({
+        id: row.id,
+        routeKey: row.routeKey,
+        txid: row.txid,
+        amountUsd: String(row.amountUsd),
+        network: row.network,
+        payTo: row.payTo,
+        createdAt: row.createdAt,
+      });
+    },
+
+    async syncState(db: AgentDatabase) {
+      const stored = await getRegistration(db);
+      if (!stored) {
+        return;
+      }
+
+      const [inbound, outbound] = await Promise.all([
+        this.fetchInboundLetters(db),
+        this.fetchOutboundLetters(db),
+      ]);
+
+      for (const letter of inbound) {
+        const existingRows = await db
+          .select()
+          .from(inboundLetters)
+          .where(eq(inboundLetters.id, letter.id))
+          .limit(1);
+        const existing = existingRows[0];
+
+        await db
+          .insert(inboundLetters)
+          .values({
+            id: letter.id,
+            mailboxId: letter.mailboxId,
+            fromName: letter.fromName,
+            receivedAt: letter.receivedAt,
+            pageCount: letter.pageCount,
+            envelopeSummary: letter.envelopeSummary,
+            serviceStatus: letter.status,
+            agentStatus:
+              existing?.agentStatus === "ignored"
+                ? "ignored"
+                : existing?.agentStatus === "received" || letter.status === "received"
+                  ? "received"
+                  : "pending",
+            ocrText: existing?.ocrText ?? null,
+            unlockPaymentTxid: letter.unlockPaymentTxid,
+            notifiedAt: existing?.notifiedAt ?? null,
+            createdAt: letter.createdAt,
+          })
+          .onConflictDoUpdate({
+            target: inboundLetters.id,
+            set: {
+              serviceStatus: letter.status,
+              fromName: letter.fromName,
+              receivedAt: letter.receivedAt,
+              pageCount: letter.pageCount,
+              envelopeSummary: letter.envelopeSummary,
+              unlockPaymentTxid: letter.unlockPaymentTxid,
+            },
+          });
+      }
+
+      for (const letter of outbound) {
+        await db
+          .insert(outboundLetters)
+          .values({
+            id: letter.id,
+            mailboxId: letter.mailboxId,
+            recipientJson: JSON.stringify(letter.recipient),
+            subject: letter.subject,
+            bodyMarkdown: letter.bodyMarkdown,
+            status: letter.status,
+            paymentTxid: letter.paymentTxid,
+            createdAt: letter.createdAt,
+            sentAt: letter.sentAt,
+          })
+          .onConflictDoUpdate({
+            target: outboundLetters.id,
+            set: {
+              status: letter.status,
+              paymentTxid: letter.paymentTxid,
+              sentAt: letter.sentAt,
+            },
+          });
+      }
+    },
+
+    async currentRegistration(db: AgentDatabase) {
+      return getRegistration(db);
+    },
+
+    async latestPayment(db: AgentDatabase) {
+      const rows = await db.select().from(payments).orderBy(desc(payments.createdAt)).limit(1);
+      return rows[0] ?? null;
+    },
+  };
+}
