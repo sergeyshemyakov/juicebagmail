@@ -83,19 +83,32 @@ export function createJuicebagClient(env: AgentEnv) {
         },
       });
 
-      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/registrations`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/registrations (x402 — will probe then pay)`);
+      let response: Response;
+      try {
+        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/registrations`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        console.error("[agent→service] registration paidFetch threw:", err);
+        throw err;
+      }
 
+      console.log(`[agent→service] registration response: status=${response.status}`);
       if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        console.error(`[agent→service] registration failed: ${body}`);
         throw new Error(`Registration failed with status ${response.status}`);
       }
 
       const { data, payment } = await parseResponse<RegistrationResponse>(response);
+      if (payment?.transaction) {
+        console.log(`[agent→service] x402 registration settled: txid=${payment.transaction}`);
+      }
       const parsed = registrationResponseSchema.parse(data);
 
       await db
@@ -139,26 +152,40 @@ export function createJuicebagClient(env: AgentEnv) {
         throw new Error("Agent is not registered yet");
       }
 
-      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await authHeaders(db)),
-        },
-        body: JSON.stringify({
-          mailboxId: stored.mailboxId,
-          recipient: input.recipient,
-          subject: input.subject,
-          bodyMarkdown: input.bodyMarkdown,
-          sendMode: "standard",
-        }),
-      });
+      console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/outbound-letters (x402 — will probe then pay)`);
+      let response: Response;
+      try {
+        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/outbound-letters`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(await authHeaders(db)),
+          },
+          body: JSON.stringify({
+            mailboxId: stored.mailboxId,
+            recipient: input.recipient,
+            subject: input.subject,
+            bodyMarkdown: input.bodyMarkdown,
+            sendMode: "standard",
+          }),
+        });
+      } catch (err) {
+        console.error("[agent→service] send-letter paidFetch threw:", err);
+        throw err;
+      }
 
+      console.log(`[agent→service] send-letter response: status=${response.status}`);
       if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        console.error(`[agent→service] send-letter failed: ${body}`);
         throw new Error(`Send letter failed with status ${response.status}`);
       }
 
-      return parseResponse<{ letterId: string; status: "queued"; x402?: { txid?: string } }>(response);
+      const result = await parseResponse<{ letterId: string; status: "queued"; x402?: { txid?: string } }>(response);
+      if (result.payment?.transaction) {
+        console.log(`[agent→service] x402 send-letter settled: txid=${result.payment.transaction}`);
+      }
+      return result;
     },
 
     async unlockLetter(db: AgentDatabase, input: AgentUnlockLetterInput) {
@@ -167,23 +194,33 @@ export function createJuicebagClient(env: AgentEnv) {
         throw new Error("Agent is not registered yet");
       }
 
-      const response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await authHeaders(db)),
-        },
-        body: JSON.stringify({
-          mailboxId: stored.mailboxId,
-          letterId: input.letterId,
-        }),
-      });
+      console.log(`[agent→service] POST ${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock (x402 — will probe then pay)`);
+      let response: Response;
+      try {
+        response = await paidFetch(`${env.SERVICE_BASE_URL}/v1/inbound-letters/unlock`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(await authHeaders(db)),
+          },
+          body: JSON.stringify({
+            mailboxId: stored.mailboxId,
+            letterId: input.letterId,
+          }),
+        });
+      } catch (err) {
+        console.error("[agent→service] unlock paidFetch threw:", err);
+        throw err;
+      }
 
+      console.log(`[agent→service] unlock response: status=${response.status}`);
       if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        console.error(`[agent→service] unlock failed: ${body}`);
         throw new Error(`Unlock failed with status ${response.status}`);
       }
 
-      return parseResponse<{
+      const result = await parseResponse<{
         letterId: string;
         status: "unlocked";
         from: string;
@@ -191,6 +228,10 @@ export function createJuicebagClient(env: AgentEnv) {
         ocrText: string;
         x402?: { txid?: string };
       }>(response);
+      if (result.payment?.transaction) {
+        console.log(`[agent→service] x402 unlock settled: txid=${result.payment.transaction}`);
+      }
+      return result;
     },
 
     async fetchInboundLetters(db: AgentDatabase) {

@@ -8,7 +8,7 @@ import { z } from "zod";
 
 const agentApiUrl = process.env.AGENT_API_URL ?? "http://localhost:4022";
 const agentUiToken =
-  process.env.AGENT_UI_TOKEN ?? "juicebag-agent-ui-demo-token";
+  process.env.VITE_AGENT_UI_TOKEN ?? "juicebag-agent-ui-demo-token";
 
 async function request(path: string, init?: RequestInit) {
   const response = await fetch(`${agentApiUrl}${path}`, {

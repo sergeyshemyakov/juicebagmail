@@ -24,6 +24,10 @@ import {
   webhookEvents,
 } from "./db/schema.js";
 import { createEventBus } from "./lib/events.js";
+import {
+  getCachedAgentBalances,
+  refreshAgentBalances,
+} from "./lib/balances.js";
 import { loadAgentEnv } from "./lib/env.js";
 import { createId, nowIso } from "./lib/ids.js";
 import { createJuicebagClient } from "./lib/juicebag-client.js";
@@ -51,8 +55,8 @@ function requireUiToken(c: AgentContext) {
   const header = c.req.header("Authorization");
   const queryToken = c.req.query("token");
   const isAuthorized =
-    header === `Bearer ${env.AGENT_UI_TOKEN}` ||
-    queryToken === env.AGENT_UI_TOKEN;
+    header === `Bearer ${env.VITE_AGENT_UI_TOKEN}` ||
+    queryToken === env.VITE_AGENT_UI_TOKEN;
 
   if (!isAuthorized) {
     return c.json({ error: "Unauthorized" }, 401);
@@ -68,11 +72,23 @@ app.get("/state", async (c) => {
     return unauthorized;
   }
 
+  void refreshAgentBalances(env).catch(() => {});
   await juicebag.syncState(db).catch(() => {});
   return c.json(await buildAgentState({ db, env }));
 });
 
+app.get("/balances", (c) => {
+  const unauthorized = requireUiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  void refreshAgentBalances(env).catch(() => {});
+  return c.json(getCachedAgentBalances(env));
+});
+
 app.post("/actions/register", async (c) => {
+  console.log("[agent] POST /actions/register");
   const unauthorized = requireUiToken(c);
   if (unauthorized) {
     return unauthorized;
@@ -106,10 +122,12 @@ app.post("/actions/register", async (c) => {
     txid,
   });
 
+  void refreshAgentBalances(env).catch(() => {});
   return c.json(await buildAgentState({ db, env }), 201);
 });
 
 app.post("/actions/send-letter", async (c) => {
+  console.log("[agent] POST /actions/send-letter");
   const unauthorized = requireUiToken(c);
   if (unauthorized) {
     return unauthorized;
@@ -141,10 +159,12 @@ app.post("/actions/send-letter", async (c) => {
     txid,
   });
 
+  void refreshAgentBalances(env).catch(() => {});
   return c.json(await buildAgentState({ db, env }));
 });
 
 app.post("/actions/unlock-letter", async (c) => {
+  console.log("[agent] POST /actions/unlock-letter");
   const unauthorized = requireUiToken(c);
   if (unauthorized) {
     return unauthorized;
@@ -184,10 +204,12 @@ app.post("/actions/unlock-letter", async (c) => {
     txid,
   });
 
+  void refreshAgentBalances(env).catch(() => {});
   return c.json(await buildAgentState({ db, env }));
 });
 
 app.post("/actions/ignore-letter", async (c) => {
+  console.log("[agent] POST /actions/ignore-letter");
   const unauthorized = requireUiToken(c);
   if (unauthorized) {
     return unauthorized;
@@ -210,6 +232,7 @@ app.post("/actions/ignore-letter", async (c) => {
     message: `Ignored inbound letter ${parsed.data.letterId}`,
   });
 
+  void refreshAgentBalances(env).catch(() => {});
   return c.json(await buildAgentState({ db, env }));
 });
 

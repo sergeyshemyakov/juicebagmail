@@ -13,22 +13,23 @@ Algorand agentic commerce hackathon project for June 2026.
 
 ## Required env
 
-Create a local `.env` based on `.env.example`.
+Env is split between the two backend apps. Copy the example files and fill in the required values:
 
-Minimum important values:
+```bash
+cp .env.agent.example apps/agent-api/.env
+cp .env.service.example apps/service-api/.env
+```
 
-- `AGENT_MNEMONIC` or `AVM_MNEMONIC`: the paying TestNet wallet mnemonic for `agent-api`
-- `SELLER_ADDRESS`: the TestNet USDC-enabled address that `service-api` should receive payments on
-- `WEBHOOK_SECRET_MASTER_KEY`: encryption key seed for stored webhook secrets
+**`apps/agent-api/.env`** (based on `.env.agent.example`):
 
-Optional but useful:
+- `AGENT_MNEMONIC` *(required)*: the paying TestNet wallet mnemonic for `agent-api`
+- `VITE_AGENT_UI_TOKEN`, `AGENT_BASE_URL`, `SERVICE_BASE_URL`, `ALGOD_URL` *(optional)*
 
-- `ADMIN_UI_TOKEN`
-- `AGENT_UI_TOKEN`
-- `SERVICE_BASE_URL`
-- `AGENT_BASE_URL`
-- `ALGOD_URL`
-- `FACILITATOR_URL`
+**`apps/service-api/.env`** (based on `.env.service.example`):
+
+- `SELLER_ADDRESS` *(required)*: the TestNet USDC-enabled address that `service-api` should receive payments on
+- `WEBHOOK_SECRET_MASTER_KEY` *(required)*: encryption key seed for stored webhook secrets
+- `VITE_ADMIN_UI_TOKEN`, `SERVICE_BASE_URL`, `FACILITATOR_URL` *(optional)*
 
 ## Install and build
 

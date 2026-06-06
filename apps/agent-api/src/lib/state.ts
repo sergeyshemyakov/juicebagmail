@@ -12,7 +12,7 @@ import {
   registration,
 } from "../db/schema.js";
 import type { AgentEnv } from "./env.js";
-import { mnemonicToAddress, fetchBalances } from "./wallet.js";
+import { getCachedAgentBalances } from "./balances.js";
 
 export function parseLegalIdentity(value: string) {
   return JSON.parse(value) as Address;
@@ -31,8 +31,7 @@ export async function buildAgentState(input: {
   ]);
 
   const reg = regRows[0] ?? null;
-  const address = mnemonicToAddress(input.env.mnemonic);
-  const balances = await fetchBalances(address, input.env.ALGOD_URL);
+  const balances = getCachedAgentBalances(input.env);
   const lastEvent = eventRows[0] ?? null;
 
   return agentStateSchema.parse({
@@ -50,7 +49,7 @@ export async function buildAgentState(input: {
     balances: {
       algo: balances.algo,
       usdc: balances.usdc,
-      address,
+      address: balances.address,
     },
     inboundLetters: inboundRows.map((row) => ({
       id: row.id,

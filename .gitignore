@@ -16,3 +16,4 @@ apps/*/.data
 prompts
 algorand
 .venv
+.mcp.json

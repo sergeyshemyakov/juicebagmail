@@ -12,7 +12,7 @@ const envSchema = z.object({
   AGENT_PORT: z.coerce.number().int().positive().default(AGENT_PORT),
   AGENT_BASE_URL: z.string().url().default(`http://localhost:${AGENT_PORT}`),
   AGENT_DB_PATH: z.string().default(path.resolve(process.cwd(), ".data/agent.db")),
-  AGENT_UI_TOKEN: z.string().default("juicebag-agent-ui-demo-token"),
+  VITE_AGENT_UI_TOKEN: z.string().default("juicebag-agent-ui-demo-token"),
   SERVICE_BASE_URL: z.string().url().default(`http://localhost:${SERVICE_PORT}`),
   ALGOD_URL: z.string().url().default(ALGOD_TESTNET_URL),
   AGENT_MNEMONIC: z.string().optional(),

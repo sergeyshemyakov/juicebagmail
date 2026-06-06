@@ -1,6 +1,7 @@
 import {
   type ReactNode,
   useDeferredValue,
+  useEffect,
   useState,
 } from "react";
 
@@ -9,13 +10,32 @@ import {
   ROUTE_PRICES,
 } from "@juicebag-mail/shared";
 import type {
+  Address,
   AgentRegistrationInput,
   AgentState,
   AgentSendLetterInput,
+  InternalInboundLetterScanExtractResponse,
   ServiceState,
 } from "@juicebag-mail/shared";
 
+type ModalContent =
+  | { kind: "agent-inbound"; letter: AgentState["inboundLetters"][number] }
+  | { kind: "agent-outbound"; letter: AgentState["outboundLetters"][number] }
+  | { kind: "service-inbound"; letter: ServiceState["inboundLetters"][number] }
+  | { kind: "service-outbound"; letter: ServiceState["outboundLetters"][number] };
+
+type InboundMode = "text" | "scan";
+type InboundFormState = {
+  mailboxId: string;
+  fromName: string;
+  envelopeSummary: string;
+  ocrText: string;
+  scanDraftId: string;
+  scanFileName: string;
+};
+
 import { api } from "../api/client";
+import demoLetterImageUrl from "../../demo_assets/letter_demo.jpg";
 import { useAgentEvents } from "../hooks/useAgentEvents";
 import { usePollingResource } from "../hooks/usePollingResource";
 
@@ -45,23 +65,38 @@ const initialLetter: AgentSendLetterInput = {
 };
 
 export function App() {
-  const agent = usePollingResource(api.getAgentState, 4_000);
-  const service = usePollingResource(api.getServiceState, 4_000);
+  const [agentStateInterval, setAgentStateInterval] = useState(3_000);
+  const agent = usePollingResource(api.getAgentState, agentStateInterval);
+  const agentBalances = usePollingResource(api.getAgentBalances, 2_000);
+  const service = usePollingResource(api.getServiceState, 8_000);
+  const serviceBalances = usePollingResource(api.getServiceBalances, 2_000);
   const liveAgentEvent = useAgentEvents();
+
+  useEffect(() => {
+    if (agent.data?.registration && agentStateInterval !== 8_000) {
+      setAgentStateInterval(8_000);
+    }
+  }, [agent.data?.registration, agentStateInterval]);
 
   const [registrationForm, setRegistrationForm] =
     useState<AgentRegistrationInput>(initialRegistration);
   const [letterForm, setLetterForm] = useState<AgentSendLetterInput>(initialLetter);
-  const [inboundForm, setInboundForm] = useState({
+  const [inboundMode, setInboundMode] = useState<InboundMode>("text");
+  const [inboundForm, setInboundForm] = useState<InboundFormState>({
     mailboxId: "",
     fromName: "Finanzamt Berlin",
-    pageCount: 2,
-    envelopeSummary: "Tax authority letter",
+    envelopeSummary: "Musterstrasse 1, 10115 Berlin",
     ocrText:
       "Sehr geehrte Damen und Herren,\n\nwir bitten um eine kurze Rückmeldung.\n",
-    scanFileName: "scan.pdf",
+    scanDraftId: "",
+    scanFileName: "",
   });
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [scanFile, setScanFile] = useState<File | null>(null);
+  const [sentToPrinterIds, setSentToPrinterIds] = useState<Set<string>>(new Set());
+  const [busyActions, setBusyActions] = useState<Set<string>>(new Set());
+  const [actionResults, setActionResults] = useState<Record<string, "success" | "error">>({});
+  const [modal, setModal] = useState<ModalContent | null>(null);
+  const [uiError, setUiError] = useState<string | null>(null);
 
   const deferredInbound = useDeferredValue(agent.data?.inboundLetters ?? []);
   const deferredOutbound = useDeferredValue(agent.data?.outboundLetters ?? []);
@@ -70,14 +105,110 @@ export function App() {
 
   const defaultMailboxId =
     agent.data?.registration?.mailboxId ?? service.data?.agents[0]?.mailboxId ?? "";
+  const inboundMailboxId = inboundForm.mailboxId || defaultMailboxId;
+  const canSubmitInbound =
+    inboundMailboxId.length > 0 &&
+    (inboundMode === "text" || inboundForm.scanDraftId.length > 0);
 
-  async function runAction(actionKey: string, task: () => Promise<unknown>) {
-    setBusyAction(actionKey);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDefaultScan() {
+      try {
+        const response = await fetch(demoLetterImageUrl);
+        const blob = await response.blob();
+        if (!response.ok) {
+          throw new Error("Failed to load bundled demo letter");
+        }
+
+        if (!cancelled) {
+          setScanFile((current) => current ?? new File([blob], "letter_demo.jpg", { type: blob.type || "image/jpeg" }));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setUiError(error instanceof Error ? error.message : "Failed to load demo letter");
+        }
+      }
+    }
+
+    void loadDefaultScan();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function runAction<T>(actionKey: string, task: () => Promise<T>) {
+    setBusyActions((prev) => new Set([...prev, actionKey]));
+    let succeeded = false;
+    let value: T | undefined;
     try {
-      await task();
-      await Promise.all([agent.refresh(), service.refresh()]);
+      value = await task();
+      succeeded = true;
+      setUiError(null);
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "Request failed");
     } finally {
-      setBusyAction(null);
+      setBusyActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey);
+        return next;
+      });
+    }
+    setActionResults((prev) => ({ ...prev, [actionKey]: succeeded ? "success" : "error" }));
+    setTimeout(() => {
+      setActionResults((prev) => {
+        const { [actionKey]: _, ...rest } = prev;
+        return rest;
+      });
+    }, 3_000);
+    if (succeeded) {
+      void Promise.all([agent.refresh(), service.refresh()]);
+    }
+
+    return value;
+  }
+
+  function clearScanDraft() {
+    setInboundForm((current) => ({
+      ...current,
+      scanDraftId: "",
+      scanFileName: "",
+    }));
+  }
+
+  function applyExtractedScan(result: InternalInboundLetterScanExtractResponse) {
+    setInboundForm((current) => ({
+      ...current,
+      fromName: result.fromName,
+      envelopeSummary: result.envelopeSummary,
+      ocrText: result.ocrText,
+      scanDraftId: result.scanDraftId,
+      scanFileName: result.scanFileName,
+    }));
+  }
+
+  async function handleScanExtract() {
+    const mailboxId = inboundForm.mailboxId || defaultMailboxId;
+    if (!mailboxId) {
+      setUiError("Choose a mailbox before extracting a scan.");
+      return;
+    }
+
+    if (!scanFile) {
+      setUiError("Choose a PNG or JPEG scan first.");
+      return;
+    }
+
+    const result = await runAction("extract-scan", () =>
+      api.extractInboundLetterFromScan({
+        mailboxId,
+        scan: scanFile,
+      }),
+    );
+
+    if (result) {
+      applyExtractedScan(result);
     }
   }
 
@@ -87,21 +218,29 @@ export function App() {
   } : null);
 
   const currentServiceEvent = service.data?.lastEvent ?? null;
+  const displayedBalances: AgentState["balances"] =
+    agentBalances.data ?? agent.data?.balances ?? {
+      algo: 0,
+      usdc: 0,
+      address: "",
+    };
 
   return (
     <div className="app-shell">
       <header className="hero">
         <div>
           <p className="eyebrow">Algorand x402 Hackathon Demo</p>
-          <h1>Juicebag Mail</h1>
+          <h1>Juicebag Mail Dash</h1>
           <p className="hero-copy">
-            Physical mail, agentic commerce, and paid unlocks in one observable loop.
+            Your juicebag keeps nagging about &ldquo;paper mail&rdquo; from Finanzamt, and it is definitely not an email? 
+            <br></br>
+            Juicebag Mail to rescue!
           </p>
         </div>
         <div className="price-strip">
-          <PricePill label="Register" value={ROUTE_PRICES.registration} />
-          <PricePill label="Send letter" value={ROUTE_PRICES.outboundLetter} />
-          <PricePill label="Unlock OCR" value={ROUTE_PRICES.inboundUnlock} />
+          <PricePill icon="📮" label="Register" value={ROUTE_PRICES.registration} />
+          <PricePill icon="✉️" label="Send letter" value={ROUTE_PRICES.outboundLetter} />
+          <PricePill icon="📬" label="Receive mail" value={ROUTE_PRICES.inboundUnlock} />
         </div>
       </header>
 
@@ -113,15 +252,23 @@ export function App() {
           />
 
           <div className="summary-grid">
-            <MetricCard label="ALGO" value={agent.data?.balances.algo?.toFixed(3) ?? "--"} />
-            <MetricCard label="USDC" value={agent.data?.balances.usdc?.toFixed(3) ?? "--"} />
+            <MetricCard label="ALGO balance" symbol="ALGO" value={displayedBalances.algo.toFixed(3)} />
+            <MetricCard label="USDC balance" symbol="USDC" value={displayedBalances.usdc.toFixed(3)} />
+            <MetricCard label="Total sent" value={String(agent.data?.outboundLetters.length ?? 0)} />
             <MetricCard
-              label="Mailbox"
-              value={agent.data?.registration?.mailboxId ?? "Not registered"}
+              label="Total received"
+              value={String(agent.data?.inboundLetters.filter((l) => l.agentStatus !== "ignored").length ?? 0)}
             />
           </div>
 
-          <Card title="Identity">
+          <div className="mailbox-strip">
+            <span className="mailbox-label">Mailbox ID</span>
+            <span className="mailbox-value">
+              {agent.data?.registration?.mailboxId ?? "Not registered"}
+            </span>
+          </div>
+
+          <Card title="My address">
             {agent.data?.registration ? (
               <div className="identity-card">
                 <p>{agent.data.registration.agentName}</p>
@@ -191,8 +338,8 @@ export function App() {
                   />
                 </div>
                 <ActionButton
-                  label={busyAction === "register" ? "Registering..." : "Register Mailbox"}
-                  disabled={busyAction !== null}
+                  label={busyActions.has("register") ? "Registering..." : "Register Mailbox"}
+                  disabled={busyActions.has("register")}
                 />
               </form>
             )}
@@ -247,8 +394,8 @@ export function App() {
                 />
               </label>
               <ActionButton
-                label={busyAction === "send-letter" ? "Sending..." : "Pay and Queue Letter"}
-                disabled={busyAction !== null || !agent.data?.registration}
+                label={busyActions.has("send-letter") ? "Sending..." : `Send letter (${ROUTE_PRICES.outboundLetter})`}
+                disabled={busyActions.has("send-letter") || !agent.data?.registration}
               />
             </form>
           </Card>
@@ -256,6 +403,10 @@ export function App() {
           <Card title="Inbound Mail">
             <Table
               columns={["From", "Status", "Received", "Action"]}
+              onRowClick={(id) => {
+                const letter = agent.data?.inboundLetters.find((l) => l.id === id);
+                if (letter) setModal({ kind: "agent-inbound", letter });
+              }}
               rows={deferredInbound.map((letter: AgentState["inboundLetters"][number]) => ({
                 key: letter.id,
                 cells: [
@@ -265,29 +416,33 @@ export function App() {
                   </div>,
                   <StatusBadge status={letter.agentStatus} />,
                   new Date(letter.receivedAt).toLocaleString(),
-                  <div className="row-actions">
-                    <button
-                      className="ghost-button"
-                      disabled={busyAction !== null || letter.agentStatus !== "pending"}
-                      onClick={() =>
-                        void runAction(`unlock-${letter.id}`, () =>
-                          api.unlockLetter(letter.id),
-                        )
-                      }
-                    >
-                      Unlock
-                    </button>
-                    <button
-                      className="ghost-button"
-                      disabled={busyAction !== null || letter.agentStatus !== "pending"}
-                      onClick={() =>
-                        void runAction(`ignore-${letter.id}`, () =>
-                          api.ignoreLetter(letter.id),
-                        )
-                      }
-                    >
-                      Ignore
-                    </button>
+                  <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    {letter.agentStatus !== "received" && (
+                      <button
+                        className="ghost-button"
+                        disabled={busyActions.has(`unlock-${letter.id}`)}
+                        onClick={() =>
+                          void runAction(`unlock-${letter.id}`, () =>
+                            api.unlockLetter(letter.id),
+                          )
+                        }
+                      >
+                        Get full ({ROUTE_PRICES.inboundUnlock})
+                      </button>
+                    )}
+                    {letter.agentStatus === "pending" && (
+                      <button
+                        className="ghost-button"
+                        disabled={busyActions.has(`ignore-${letter.id}`)}
+                        onClick={() =>
+                          void runAction(`ignore-${letter.id}`, () =>
+                            api.ignoreLetter(letter.id),
+                          )
+                        }
+                      >
+                        Ignore
+                      </button>
+                    )}
                   </div>,
                 ],
               }))}
@@ -298,6 +453,10 @@ export function App() {
           <Card title="Outbound Mail">
             <Table
               columns={["Subject", "Status", "Created", "Txid"]}
+              onRowClick={(id) => {
+                const letter = agent.data?.outboundLetters.find((l) => l.id === id);
+                if (letter) setModal({ kind: "agent-outbound", letter });
+              }}
               rows={deferredOutbound.map((letter: AgentState["outboundLetters"][number]) => ({
                 key: letter.id,
                 cells: [
@@ -307,7 +466,9 @@ export function App() {
                   </div>,
                   <StatusBadge status={letter.status} />,
                   new Date(letter.createdAt).toLocaleString(),
-                  <TxLink txid={letter.paymentTxid ?? undefined} />,
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <TxLink txid={letter.paymentTxid ?? undefined} />
+                  </span>,
                 ],
               }))}
               emptyMessage="No outbound letters yet."
@@ -323,7 +484,7 @@ export function App() {
 
         <section className="pane pane-ops">
           <PaneHeader
-            title="Juicebag Ops Console"
+            title="Juicebag Mail service console"
             subtitle="Registered mailboxes, inbound ingestion, and operator-only state."
           />
 
@@ -340,6 +501,9 @@ export function App() {
               label="Queued Outbound"
               value={String(service.data?.counters.queuedOutboundLetters ?? 0)}
             />
+            <MetricCard label="USDC balance" symbol="USDC" value={(serviceBalances.data?.usdc ?? 0).toFixed(3)} />
+            <MetricCard label="Total sent" value={String(service.data?.outboundLetters.length ?? 0)} />
+            <MetricCard label="Total received" value={String(service.data?.inboundLetters.length ?? 0)} />
           </div>
 
           <Card title="Ingest Inbound Letter">
@@ -349,19 +513,93 @@ export function App() {
                 event.preventDefault();
                 void runAction("ingest", () =>
                   api.ingestInboundLetter({
-                    ...inboundForm,
-                    mailboxId: inboundForm.mailboxId || defaultMailboxId,
+                    mailboxId: inboundMailboxId,
+                    fromName: inboundForm.fromName,
+                    pageCount: 1,
+                    envelopeSummary: inboundForm.envelopeSummary,
+                    ocrText: inboundForm.ocrText,
+                    scanDraftId:
+                      inboundMode === "scan" ? inboundForm.scanDraftId || undefined : undefined,
+                    scanFileName:
+                      inboundMode === "scan" ? inboundForm.scanFileName || undefined : undefined,
                   }),
                 );
               }}
             >
               <LabeledInput
                 label="Mailbox Id"
-                value={inboundForm.mailboxId || defaultMailboxId}
+                value={inboundMailboxId}
                 onChange={(value) =>
-                  setInboundForm((current) => ({ ...current, mailboxId: value }))
+                  setInboundForm((current) => ({
+                    ...current,
+                    mailboxId: value,
+                    scanDraftId:
+                      value !== (current.mailboxId || defaultMailboxId) ? "" : current.scanDraftId,
+                    scanFileName:
+                      value !== (current.mailboxId || defaultMailboxId) ? "" : current.scanFileName,
+                  }))
                 }
               />
+              <label className="field">
+                <span>Input mode</span>
+                <div className="mode-toggle" role="tablist" aria-label="Inbound ingest mode">
+                  <button
+                    className={inboundMode === "text" ? "mode-toggle-button is-active" : "mode-toggle-button"}
+                    onClick={() => setInboundMode("text")}
+                    type="button"
+                  >
+                    Text
+                  </button>
+                  <button
+                    className={inboundMode === "scan" ? "mode-toggle-button is-active" : "mode-toggle-button"}
+                    onClick={() => setInboundMode("scan")}
+                    type="button"
+                  >
+                    Scan
+                  </button>
+                </div>
+              </label>
+              {inboundMode === "scan" && (
+                <>
+                  <label className="field">
+                    <span>Scan image</span>
+                    <input
+                      accept="image/png,image/jpeg"
+                      type="file"
+                      onChange={(event) => {
+                        const nextFile = event.target.files?.[0] ?? null;
+                        setScanFile(nextFile);
+                        clearScanDraft();
+                      }}
+                    />
+                    {scanFile && <small className="muted">{scanFile.name}</small>}
+                  </label>
+                  <div className="scan-actions">
+                    <button
+                      className="ghost-button"
+                      disabled={busyActions.has("extract-scan") || !scanFile || !inboundMailboxId}
+                      onClick={() => void handleScanExtract()}
+                      type="button"
+                    >
+                      {busyActions.has("extract-scan") ? "Extracting..." :
+                        actionResults["extract-scan"] === "success" ? "✓ Extracted" :
+                        actionResults["extract-scan"] === "error" ? "✗ Extract failed" :
+                        "Extract from Scan"}
+                    </button>
+                    <span className="muted inline-note">
+                      Upload an image, review the OCR, then ingest the letter.
+                    </span>
+                  </div>
+                  {inboundForm.scanDraftId && (
+                    <div className="scan-draft-card">
+                      <strong>OCR ready for review</strong>
+                      <small>
+                        Stored as {inboundForm.scanFileName} for mailbox {inboundMailboxId}.
+                      </small>
+                    </div>
+                  )}
+                </>
+              )}
               <LabeledInput
                 label="From"
                 value={inboundForm.fromName}
@@ -369,28 +607,8 @@ export function App() {
                   setInboundForm((current) => ({ ...current, fromName: value }))
                 }
               />
-              <div className="split-fields">
-                <LabeledInput
-                  label="Pages"
-                  type="number"
-                  value={String(inboundForm.pageCount)}
-                  onChange={(value) =>
-                    setInboundForm((current) => ({
-                      ...current,
-                      pageCount: Number(value),
-                    }))
-                  }
-                />
-                <LabeledInput
-                  label="Scan File"
-                  value={inboundForm.scanFileName}
-                  onChange={(value) =>
-                    setInboundForm((current) => ({ ...current, scanFileName: value }))
-                  }
-                />
-              </div>
               <LabeledInput
-                label="Envelope Summary"
+                label="Sender address"
                 value={inboundForm.envelopeSummary}
                 onChange={(value) =>
                   setInboundForm((current) => ({
@@ -400,7 +618,7 @@ export function App() {
                 }
               />
               <label className="field">
-                <span>OCR Text</span>
+                <span>Letter text</span>
                 <textarea
                   rows={5}
                   value={inboundForm.ocrText}
@@ -413,8 +631,14 @@ export function App() {
                 />
               </label>
               <ActionButton
-                label={busyAction === "ingest" ? "Ingesting..." : "Ingest Mail"}
-                disabled={busyAction !== null || !defaultMailboxId}
+                label={
+                  busyActions.has("ingest") ? "Ingesting..." :
+                  actionResults["ingest"] === "success" ? "✓ Ingested!" :
+                  actionResults["ingest"] === "error" ? "✗ Failed" :
+                  "Ingest Mail"
+                }
+                result={actionResults["ingest"]}
+                disabled={busyActions.has("ingest") || !canSubmitInbound}
               />
             </form>
           </Card>
@@ -433,6 +657,10 @@ export function App() {
           <Card title="Inbound Queue">
             <Table
               columns={["From", "Status", "Received", "Txid"]}
+              onRowClick={(id) => {
+                const letter = service.data?.inboundLetters.find((l) => l.id === id);
+                if (letter) setModal({ kind: "service-inbound", letter });
+              }}
               rows={deferredServiceInbound.map((letter: ServiceState["inboundLetters"][number]) => ({
                 key: letter.id,
                 cells: [
@@ -442,7 +670,9 @@ export function App() {
                   </div>,
                   <StatusBadge status={letter.status} />,
                   new Date(letter.receivedAt).toLocaleString(),
-                  <TxLink txid={letter.unlockPaymentTxid ?? undefined} />,
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <TxLink txid={letter.unlockPaymentTxid ?? undefined} />
+                  </span>,
                 ],
               }))}
               emptyMessage="No inbound letters yet."
@@ -452,6 +682,10 @@ export function App() {
           <Card title="Outbound Queue">
             <Table
               columns={["Subject", "Status", "Created", "Action"]}
+              onRowClick={(id) => {
+                const letter = service.data?.outboundLetters.find((l) => l.id === id);
+                if (letter) setModal({ kind: "service-outbound", letter });
+              }}
               rows={deferredServiceOutbound.map((letter: ServiceState["outboundLetters"][number]) => ({
                 key: letter.id,
                 cells: [
@@ -461,17 +695,38 @@ export function App() {
                   </div>,
                   <StatusBadge status={letter.status} />,
                   new Date(letter.createdAt).toLocaleString(),
-                  <button
-                    className="ghost-button"
-                    disabled={busyAction !== null || letter.status !== "queued"}
-                    onClick={() =>
-                      void runAction(`mark-${letter.id}`, () =>
-                        api.markOutboundSent(letter.id),
-                      )
-                    }
-                  >
-                    Mark Sent
-                  </button>,
+                  letter.status === "queued" ? (
+                    sentToPrinterIds.has(letter.id) ? (
+                      <button
+                        className="ghost-button"
+                        disabled={busyActions.has(`mark-${letter.id}`)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void runAction(`mark-${letter.id}`, () =>
+                            api.markOutboundSent(letter.id),
+                          ).then(() => {
+                            setSentToPrinterIds((prev) => {
+                              const next = new Set(prev);
+                              next.delete(letter.id);
+                              return next;
+                            });
+                          });
+                        }}
+                      >
+                        {busyActions.has(`mark-${letter.id}`) ? "Marking..." : "Mark sent"}
+                      </button>
+                    ) : (
+                      <button
+                        className="ghost-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSentToPrinterIds((prev) => new Set([...prev, letter.id]));
+                        }}
+                      >
+                        Send to printer
+                      </button>
+                    )
+                  ) : null,
                 ],
               }))}
               emptyMessage="No outbound letters yet."
@@ -486,11 +741,67 @@ export function App() {
         </section>
       </main>
 
-      {(agent.error || service.error) && (
+      {(agent.error || service.error || uiError) && (
         <footer className="error-strip">
           {agent.error && <span>Agent: {agent.error}</span>}
           {service.error && <span>Service: {service.error}</span>}
+          {uiError && <span>UI: {uiError}</span>}
         </footer>
+      )}
+
+      {modal && (
+        <Modal
+          title={
+            modal.kind === "agent-inbound" || modal.kind === "service-inbound"
+              ? modal.letter.fromName
+              : modal.letter.subject
+          }
+          onClose={() => setModal(null)}
+        >
+          {modal.kind === "agent-inbound" && (
+            <>
+              <ModalField label="Sender address" value={modal.letter.envelopeSummary} />
+              <ModalField label="Status" value={modal.letter.agentStatus} />
+              <ModalField label="Received" value={new Date(modal.letter.receivedAt).toLocaleString()} />
+              <ModalField
+                label="Full letter text"
+                value={modal.letter.ocrText ?? "Not yet unlocked. Use the Get full button to pay and receive the letter text."}
+                preformatted={!!modal.letter.ocrText}
+              />
+            </>
+          )}
+          {modal.kind === "agent-outbound" && (
+            <>
+              <ModalField label="To" value={formatAddress(modal.letter.recipient)} preformatted />
+              <ModalField label="Status" value={modal.letter.status} />
+              <ModalField label="Created" value={new Date(modal.letter.createdAt).toLocaleString()} />
+              {modal.letter.sentAt && (
+                <ModalField label="Sent" value={new Date(modal.letter.sentAt).toLocaleString()} />
+              )}
+              <ModalField label="Body" value={modal.letter.bodyMarkdown} preformatted />
+            </>
+          )}
+          {modal.kind === "service-inbound" && (
+            <>
+              <ModalField label="Sender address" value={modal.letter.envelopeSummary} />
+              <ModalField label="Status" value={modal.letter.status} />
+              <ModalField label="Received" value={new Date(modal.letter.receivedAt).toLocaleString()} />
+              <ModalField label="To: Mailbox ID" value={modal.letter.mailboxId} />
+              <ModalField label="Letter text" value={modal.letter.ocrText} preformatted />
+            </>
+          )}
+          {modal.kind === "service-outbound" && (
+            <>
+              <ModalField label="To" value={formatAddress(modal.letter.recipient)} preformatted />
+              <ModalField label="Status" value={modal.letter.status} />
+              <ModalField label="Created" value={new Date(modal.letter.createdAt).toLocaleString()} />
+              {modal.letter.sentAt && (
+                <ModalField label="Sent" value={new Date(modal.letter.sentAt).toLocaleString()} />
+              )}
+              <ModalField label="Body" value={modal.letter.bodyMarkdown} preformatted />
+            </>
+          )}
+        </Modal>
       )}
     </div>
   );
@@ -505,20 +816,24 @@ function PaneHeader(props: { title: string; subtitle: string }) {
   );
 }
 
-function PricePill(props: { label: string; value: string }) {
+function PricePill(props: { icon: string; label: string; value: string }) {
   return (
     <div className="price-pill">
+      <span className="price-icon">{props.icon}</span>
       <span>{props.label}</span>
       <strong>{props.value}</strong>
     </div>
   );
 }
 
-function MetricCard(props: { label: string; value: string }) {
+function MetricCard(props: { label: string; value: string; symbol?: string }) {
   return (
     <div className="metric-card">
       <span>{props.label}</span>
-      <strong>{props.value}</strong>
+      <div className="metric-value">
+        <strong>{props.value}</strong>
+        {props.symbol && <span className="metric-symbol">{props.symbol}</span>}
+      </div>
     </div>
   );
 }
@@ -563,9 +878,14 @@ function LabeledInput(props: {
   );
 }
 
-function ActionButton(props: { label: string; disabled?: boolean }) {
+function ActionButton(props: { label: string; disabled?: boolean; result?: "success" | "error" }) {
+  const cls = [
+    "action-button",
+    props.result === "success" ? "action-button--success" : "",
+    props.result === "error" ? "action-button--error" : "",
+  ].filter(Boolean).join(" ");
   return (
-    <button className="action-button" disabled={props.disabled} type="submit">
+    <button className={cls} disabled={props.disabled} type="submit">
       {props.label}
     </button>
   );
@@ -596,6 +916,7 @@ function Table(props: {
   columns: string[];
   rows: Array<{ key: string; cells: ReactNode[] }>;
   emptyMessage: string;
+  onRowClick?: (key: string) => void;
 }) {
   if (props.rows.length === 0) {
     return <p className="muted">{props.emptyMessage}</p>;
@@ -613,7 +934,11 @@ function Table(props: {
         </thead>
         <tbody>
           {props.rows.map((row) => (
-            <tr key={row.key}>
+            <tr
+              key={row.key}
+              className={props.onRowClick ? "clickable-row" : undefined}
+              onClick={props.onRowClick ? () => props.onRowClick!(row.key) : undefined}
+            >
               {row.cells.map((cell, index) => (
                 <td key={`${row.key}-${index}`}>{cell}</td>
               ))}
@@ -623,4 +948,41 @@ function Table(props: {
       </table>
     </div>
   );
+}
+
+function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="modal-overlay" onClick={props.onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{props.title}</h3>
+          <button className="modal-close" onClick={props.onClose}>&#x2715;</button>
+        </div>
+        <div className="modal-body">
+          {props.children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModalField(props: { label: string; value: string; preformatted?: boolean }) {
+  return (
+    <div className="modal-field">
+      <span className="modal-field-label">{props.label}</span>
+      {props.preformatted ? (
+        <pre className="modal-text-block">{props.value}</pre>
+      ) : (
+        <span className="modal-field-value">{props.value}</span>
+      )}
+    </div>
+  );
+}
+
+function formatAddress(addr: Address): string {
+  const parts = [addr.street1];
+  if (addr.street2) parts.push(addr.street2);
+  parts.push(`${addr.postalCode} ${addr.city}`);
+  parts.push(addr.country);
+  return parts.join("\n");
 }

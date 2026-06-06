@@ -170,7 +170,7 @@ For the first demo, hardcode the Juicebag Mail base URL in the agent config.
 │ - inbox state   │                           │ - file storage     │
 └───────┬─────────┘                           └─────────┬──────────┘
         │                                                 │
-        │ AGENT_UI_TOKEN                                  │ ADMIN_UI_TOKEN
+        │ VITE_AGENT_UI_TOKEN                                  │ VITE_ADMIN_UI_TOKEN
         ▼                                                 ▼
 ┌─────────────────┐                           ┌────────────────────┐
 │ Demo UI         │                           │ Internal Service   │
@@ -207,8 +207,8 @@ Do not use `agentAuthToken` as the dashboard login.
 
 Use:
 
-- `AGENT_UI_TOKEN` for the agent pane to call `agent-api`
-- `ADMIN_UI_TOKEN` for the operator pane to call `service-api`
+- `VITE_AGENT_UI_TOKEN` for the agent pane to call `agent-api`
+- `VITE_ADMIN_UI_TOKEN` for the operator pane to call `service-api`
 
 Keep `agentAuthToken` internal to `agent-api` for calling Juicebag Mail.
 
@@ -425,7 +425,7 @@ Response body:
 
 These are not x402-protected. Protect all `/internal/*` endpoints with:
 
-- `Authorization: Bearer <ADMIN_UI_TOKEN>`
+- `Authorization: Bearer <VITE_ADMIN_UI_TOKEN>`
 
 Read endpoints for the operator dashboard:
 
@@ -475,7 +475,7 @@ The customer agent is its own small service, not just a browser tab.
 
 Protect the agent dashboard endpoints with:
 
-- `Authorization: Bearer <AGENT_UI_TOKEN>`
+- `Authorization: Bearer <VITE_AGENT_UI_TOKEN>`
 
 Apply that to:
 
@@ -483,7 +483,7 @@ Apply that to:
 - `GET /events`
 - `POST /actions/*`
 
-Do **not** require `AGENT_UI_TOKEN` on `POST /webhooks/incoming-mail`; that route is authenticated by webhook signature verification instead.
+Do **not** require `VITE_AGENT_UI_TOKEN` on `POST /webhooks/incoming-mail`; that route is authenticated by webhook signature verification instead.
 
 ### Why a Server-Side Agent
 

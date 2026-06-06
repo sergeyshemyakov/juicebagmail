@@ -85,6 +85,7 @@ export const inboundLetterMetadataSchema = z.object({
   receivedAt: z.string(),
   pageCount: z.number().int().nonnegative(),
   envelopeSummary: z.string(),
+  ocrText: z.string(),
   status: z.enum(inboundLetterStatuses),
   unlockPaymentTxid: z.string().nullable(),
   createdAt: z.string(),
@@ -143,7 +144,17 @@ export const internalInboundLetterCreateSchema = z.object({
   pageCount: z.number().int().positive(),
   envelopeSummary: z.string().min(1),
   ocrText: z.string().min(1),
+  scanDraftId: z.string().optional(),
   scanFileName: z.string().optional(),
+});
+
+export const internalInboundLetterScanExtractResponseSchema = z.object({
+  scanDraftId: z.string(),
+  scanFileName: z.string(),
+  pageCount: z.number().int().positive(),
+  fromName: z.string(),
+  envelopeSummary: z.string(),
+  ocrText: z.string(),
 });
 
 export const paymentRecordSchema = z.object({
@@ -155,6 +166,12 @@ export const paymentRecordSchema = z.object({
   payTo: z.string(),
   status: z.string(),
   createdAt: z.string(),
+});
+
+export const agentBalancesSchema = z.object({
+  algo: z.number(),
+  usdc: z.number(),
+  address: z.string(),
 });
 
 export const webhookDeliverySchema = z.object({
@@ -179,11 +196,7 @@ export const agentStateSchema = z.object({
       registeredAt: z.string(),
     })
     .nullable(),
-  balances: z.object({
-    algo: z.number(),
-    usdc: z.number(),
-    address: z.string(),
-  }),
+  balances: agentBalancesSchema,
   inboundLetters: z.array(
     inboundLetterMetadataSchema.extend({
       agentStatus: z.enum(agentInboundStatuses),
@@ -237,6 +250,7 @@ export type AgentSendLetterInput = z.infer<typeof agentSendLetterSchema>;
 export type AgentUnlockLetterInput = z.infer<typeof agentUnlockLetterSchema>;
 export type AgentIgnoreLetterInput = z.infer<typeof agentIgnoreLetterSchema>;
 export type AgentState = z.infer<typeof agentStateSchema>;
+export type AgentBalances = z.infer<typeof agentBalancesSchema>;
 export type InboundLetterMetadata = z.infer<typeof inboundLetterMetadataSchema>;
 export type NotificationEnvelope = z.infer<typeof notificationEnvelopeSchema>;
 export type OutboundLetterMetadata = z.infer<typeof outboundLetterMetadataSchema>;
@@ -245,3 +259,6 @@ export type RegistrationRequest = z.infer<typeof registrationRequestSchema>;
 export type RegistrationResponse = z.infer<typeof registrationResponseSchema>;
 export type ServiceState = z.infer<typeof serviceStateSchema>;
 export type WebhookDeliveryRecord = z.infer<typeof webhookDeliverySchema>;
+export type InternalInboundLetterScanExtractResponse = z.infer<
+  typeof internalInboundLetterScanExtractResponseSchema
+>;

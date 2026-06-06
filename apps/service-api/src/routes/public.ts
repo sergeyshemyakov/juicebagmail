@@ -9,6 +9,7 @@ import {
   inboundLetterReceivedEventType,
   inboundLetterUnlockSchema,
   internalInboundLetterCreateSchema,
+  internalInboundLetterScanExtractResponseSchema,
   outboundLetterCreateSchema,
   registrationRequestSchema,
   ROUTE_KEYS,
@@ -31,9 +32,11 @@ import {
   webhookDeliveries,
 } from "../db/schema.js";
 import { authenticateAgent, getBearerToken } from "../lib/auth.js";
+import { getCachedServiceBalances, refreshServiceBalances } from "../lib/balances.js";
 import { decryptString, encryptString, hashToken } from "../lib/crypto.js";
 import type { ServiceEnv } from "../lib/env.js";
 import { createId, nowIso } from "../lib/ids.js";
+import { extractInboundLetterFromScan } from "../lib/inbound-scan-ocr.js";
 import { parseJsonSafe } from "../lib/json.js";
 import { renderOutboundLetterPdf } from "../pdf/outbound-letter-pdf.js";
 import { deliverWebhookEvent } from "../notifications/webhooks.js";
@@ -44,7 +47,7 @@ type ServiceContext = Context<{ Variables: ServiceVariables }>;
 
 function requireAdmin(c: ServiceContext, env: ServiceEnv) {
   const token = getBearerToken(c.req.header("Authorization"));
-  if (!token || token !== env.ADMIN_UI_TOKEN) {
+  if (!token || token !== env.VITE_ADMIN_UI_TOKEN) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -71,6 +74,7 @@ function mapInboundLetter(row: typeof inboundLetters.$inferSelect) {
     receivedAt: row.receivedAt,
     pageCount: row.pageCount,
     envelopeSummary: row.envelopeSummary,
+    ocrText: row.ocrText,
     status: row.status as "pending" | "received",
     unlockPaymentTxid: row.unlockPaymentTxid,
     createdAt: row.createdAt,
@@ -88,6 +92,105 @@ function mapOutboundLetter(row: typeof outboundLetters.$inferSelect) {
     paymentTxid: row.paymentTxid,
     createdAt: row.createdAt,
     sentAt: row.sentAt,
+  };
+}
+
+function inferImageExtension(file: File) {
+  if (file.type === "image/png") {
+    return ".png";
+  }
+
+  if (file.type === "image/jpeg") {
+    return path.extname(file.name).toLowerCase() === ".jpeg" ? ".jpeg" : ".jpg";
+  }
+
+  return "";
+}
+
+function isSupportedScanImage(file: File) {
+  return file.type === "image/png" || file.type === "image/jpeg";
+}
+
+async function createInboundLetterRecord({
+  agent,
+  db,
+  env,
+  input,
+}: {
+  agent: typeof agents.$inferSelect;
+  db: ServiceDatabase;
+  env: ServiceEnv;
+  input: {
+    envelopeSummary: string;
+    fromName: string;
+    letterId: string;
+    mailboxId: string;
+    ocrText: string;
+    pageCount: number;
+    pdfPath: string;
+    receivedAt?: string;
+  };
+}) {
+  const createdAt = nowIso();
+  const receivedAt = input.receivedAt ?? createdAt;
+
+  await db.insert(inboundLetters).values({
+    id: input.letterId,
+    mailboxId: input.mailboxId,
+    fromName: input.fromName,
+    receivedAt,
+    pageCount: input.pageCount,
+    envelopeSummary: input.envelopeSummary,
+    pdfPath: input.pdfPath,
+    ocrText: input.ocrText,
+    status: "pending",
+    unlockPaymentTxid: null,
+    createdAt,
+  });
+
+  const event: InboundLetterReceivedEvent = notificationEnvelopeSchema.parse({
+    eventId: createId("evt"),
+    type: inboundLetterReceivedEventType,
+    agentId: agent.id,
+    mailboxId: input.mailboxId,
+    letter: {
+      letterId: input.letterId,
+      from: input.fromName,
+      receivedAt,
+      pageCount: input.pageCount,
+      envelopeSummary: input.envelopeSummary,
+    },
+  });
+
+  await db.insert(notificationEvents).values({
+    id: createId("nev"),
+    eventId: event.eventId,
+    agentId: agent.id,
+    mailboxId: input.mailboxId,
+    letterId: input.letterId,
+    type: inboundLetterReceivedEventType,
+    payloadJson: JSON.stringify(event),
+    delivered: false,
+    createdAt,
+  });
+
+  const webhookSecret = decryptString(
+    agent.webhookSecretEncrypted,
+    env.WEBHOOK_SECRET_MASTER_KEY,
+  );
+
+  const delivery = await deliverWebhookEvent({
+    agentId: agent.id,
+    db,
+    event,
+    secret: webhookSecret,
+    targetUrl: agent.webhookUrl,
+    env,
+  });
+
+  return {
+    delivery,
+    letterId: input.letterId,
   };
 }
 
@@ -221,6 +324,7 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
   });
 
   app.post("/v1/registrations", async (c) => {
+    console.log("[service] POST /v1/registrations");
     const parsed = registrationRequestSchema.safeParse(await c.req.json());
     if (!parsed.success) {
       return c.json({ error: parsed.error.flatten() }, 400);
@@ -286,6 +390,7 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
   });
 
   app.post("/v1/outbound-letters", async (c) => {
+    console.log("[service] POST /v1/outbound-letters");
     const agent = await requireAgent(c, db);
     if (agent instanceof Response) {
       return agent;
@@ -358,6 +463,7 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
   });
 
   app.post("/v1/inbound-letters/unlock", async (c) => {
+    console.log("[service] POST /v1/inbound-letters/unlock");
     const agent = await requireAgent(c, db);
     if (agent instanceof Response) {
       return agent;
@@ -422,6 +528,16 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
     return c.json({ ok: true }, 200);
   });
 
+  app.get("/internal/balances", (c) => {
+    const unauthorized = requireAdmin(c, env);
+    if (unauthorized) {
+      return unauthorized;
+    }
+
+    void refreshServiceBalances(env).catch(() => {});
+    return c.json(getCachedServiceBalances(env));
+  });
+
   app.get("/internal/state", async (c) => {
     const unauthorized = requireAdmin(c, env);
     if (unauthorized) {
@@ -429,6 +545,68 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
     }
 
     return c.json(await buildServiceState(db));
+  });
+
+  app.post("/internal/inbound-letters/scan-extract", async (c) => {
+    const unauthorized = requireAdmin(c, env);
+    if (unauthorized) {
+      return unauthorized;
+    }
+
+    const body = await c.req.parseBody();
+    const mailboxId = body.mailboxId;
+    const scan = body.scan;
+
+    if (typeof mailboxId !== "string" || mailboxId.length === 0) {
+      return c.json({ error: "Mailbox Id is required" }, 400);
+    }
+
+    if (!(scan instanceof File)) {
+      return c.json({ error: "Scan image is required" }, 400);
+    }
+
+    if (!isSupportedScanImage(scan)) {
+      return c.json({ error: "Only PNG and JPEG scans are supported" }, 400);
+    }
+
+    if (scan.size > 10 * 1024 * 1024) {
+      return c.json({ error: "Scan image must be 10 MB or smaller" }, 413);
+    }
+
+    const agentRows = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.mailboxId, mailboxId))
+      .limit(1);
+    const agent = agentRows[0];
+    if (!agent) {
+      return c.json({ error: "No registered agent for mailbox" }, 404);
+    }
+
+    const scanDraftId = createId("in");
+    const extension = inferImageExtension(scan);
+    if (!extension) {
+      return c.json({ error: "Unsupported scan image type" }, 400);
+    }
+
+    const scanFileName = `scan${extension}`;
+    const letterDir = path.join(env.STORAGE_DIR, "inbound", mailboxId, scanDraftId);
+    const scanPath = path.join(letterDir, scanFileName);
+
+    fs.mkdirSync(letterDir, { recursive: true });
+    fs.writeFileSync(scanPath, Buffer.from(await scan.arrayBuffer()));
+
+    const extracted = await extractInboundLetterFromScan(scanPath, env);
+
+    return c.json(
+      internalInboundLetterScanExtractResponseSchema.parse({
+        scanDraftId,
+        scanFileName,
+        pageCount: 1,
+        ...extracted,
+      }),
+      201,
+    );
   });
 
   app.post("/internal/inbound-letters", async (c) => {
@@ -452,73 +630,36 @@ export function registerPublicRoutes(app: ServiceApp, db: ServiceDatabase, env: 
       return c.json({ error: "No registered agent for mailbox" }, 404);
     }
 
-    const letterId = createId("in");
-    const createdAt = nowIso();
-    const receivedAt = parsed.data.receivedAt ?? createdAt;
+    const letterId = parsed.data.scanDraftId ?? createId("in");
     const scanFileName = parsed.data.scanFileName ?? "scan.pdf";
     const letterDir = path.join(env.STORAGE_DIR, "inbound", parsed.data.mailboxId, letterId);
     const pdfPath = path.join(letterDir, scanFileName);
 
-    fs.mkdirSync(letterDir, { recursive: true });
+    if (parsed.data.scanDraftId) {
+      if (!fs.existsSync(pdfPath)) {
+        return c.json({ error: "Uploaded scan draft was not found" }, 404);
+      }
+    } else {
+      fs.mkdirSync(letterDir, { recursive: true });
+    }
 
-    await db.insert(inboundLetters).values({
-      id: letterId,
-      mailboxId: parsed.data.mailboxId,
-      fromName: parsed.data.fromName,
-      receivedAt,
-      pageCount: parsed.data.pageCount,
-      envelopeSummary: parsed.data.envelopeSummary,
-      pdfPath,
-      ocrText: parsed.data.ocrText,
-      status: "pending",
-      unlockPaymentTxid: null,
-      createdAt,
-    });
-
-    const event: InboundLetterReceivedEvent = notificationEnvelopeSchema.parse({
-      eventId: createId("evt"),
-      type: inboundLetterReceivedEventType,
-      agentId: agent.id,
-      mailboxId: parsed.data.mailboxId,
-      letter: {
-        letterId,
-        from: parsed.data.fromName,
-        receivedAt,
-        pageCount: parsed.data.pageCount,
+    const result = await createInboundLetterRecord({
+      agent,
+      db,
+      env,
+      input: {
         envelopeSummary: parsed.data.envelopeSummary,
+        fromName: parsed.data.fromName,
+        letterId,
+        mailboxId: parsed.data.mailboxId,
+        ocrText: parsed.data.ocrText,
+        pageCount: parsed.data.pageCount,
+        pdfPath,
+        receivedAt: parsed.data.receivedAt,
       },
     });
 
-    await db.insert(notificationEvents).values({
-      id: createId("nev"),
-      eventId: event.eventId,
-      agentId: agent.id,
-      mailboxId: parsed.data.mailboxId,
-      letterId,
-      type: inboundLetterReceivedEventType,
-      payloadJson: JSON.stringify(event),
-      delivered: false,
-      createdAt,
-    });
-
-    const webhookSecret = decryptString(
-      agent.webhookSecretEncrypted,
-      env.WEBHOOK_SECRET_MASTER_KEY,
-    );
-
-    const delivery = await deliverWebhookEvent({
-      agentId: agent.id,
-      db,
-      event,
-      secret: webhookSecret,
-      targetUrl: agent.webhookUrl,
-      env,
-    });
-
-    return c.json({
-      letterId,
-      delivery,
-    }, 201);
+    return c.json(result, 201);
   });
 
   app.post("/internal/outbound-letters/:id/mark-sent", async (c) => {

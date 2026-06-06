@@ -9,7 +9,7 @@
     "dev:service": "dotenv -e .env.service -- pnpm --filter @juicebag-mail/service-api dev",
     "dev:agent": "dotenv -e .env.agent -- pnpm --filter @juicebag-mail/agent-api dev",
     "dev:ui": "dotenv -e .env.agent -e .env.service -- pnpm --filter @juicebag-mail/demo-ui dev",
-    "dev:mcp": "dotenv -e .env.agent pnpm --filter @juicebag-mail/juicebag-mcp dev"
+    "dev:mcp": "dotenv -e .env.agent -- pnpm --filter @juicebag-mail/juicebag-mcp dev"
   },
   "devDependencies": {
     "dotenv-cli": "^11.0.0"
