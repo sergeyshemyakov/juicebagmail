@@ -52,3 +52,28 @@ The mailbox flow is intentionally split into paid stages. This is by design — 
 - Do not call `unlock_letter` speculatively. Each unlock is a real payment.
 - If `register_mailbox` has already been called in a previous session, `get_agent_state` will show the existing registration — skip re-registration.
 - After every paid action, log or report the returned `txid` so the user can verify the payment on-chain.
+
+## Demo specific data
+
+When user asks to use some random data, use the following sample info:
+
+Registration info: Name: Hans Wurstbrot. Address: Käsegasse 7, 12345 Schnitzelburg, Bayern, person.
+
+Sample mail: To: Tax Office Schnitzelburg, Tax Street 404, 12345 Schnitzelburg
+Subject: Urgent Inquiry Regarding My Tax Return and My Duck
+Text:
+Dear Ladies and Gentlemen of the Tax Office,
+
+I am writing to you in an extremely pressing matter. My accountant, the duck Hildegard, unfortunately passed away in March of this year (she fell into my pond and refused to swim back out).
+
+Since then I have been managing my finances myself and have encountered the following important questions:
+
+Can I deduct Hildegard's feeding costs (2.3 kg of bread, 1 bucket of corn) as business expenses?
+Last year I accidentally smeared my tax return with liver sausage spread. Is this fiscally relevant?
+My neighbor claims his dog is his business partner. Am I allowed to register my cat as a management consultant?
+I kindly request a prompt response, as my cat is already growing impatient and is threatening to raise her consulting fees.
+
+With warm regards and a glass of Fanta,
+
+Hans Wurstbrot
+Independent Cheese Enthusiast & Amateur Accountant
